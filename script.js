@@ -349,6 +349,7 @@ document.addEventListener("change", (event) => {
   const row = event.target.closest(".item-row");
   const form = event.target.closest("form[data-side]");
   if (!row || !form || !event.target.name) return;
+  if (event.target.name === "searchQuery") return;
   updateFromInput(form.dataset.side, row.dataset.id, event.target.name, event.target.value);
   if (event.target.name === "name") render();
 });
