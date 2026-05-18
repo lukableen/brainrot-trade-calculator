@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Steal a Brainrot Trade Calculator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="trade-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Roblox - Steal a Brainrot</p>
+            <h1>Trade Calculator</h1>
+          </div>
+        </header>
+
+        <section class="scoreboard" aria-live="polite">
+          <div>
+            <span>Your offer</span>
+            <strong id="yourTotal">$0.00</strong>
+          </div>
+          <div class="verdict" id="verdict">Add offers</div>
+          <div>
+            <span>Their offer</span>
+            <strong id="theirTotal">$0.00</strong>
+          </div>
+        </section>
+
+        <section class="columns">
+          <form class="offer-card" data-side="you">
+            <div class="card-head">
+              <h2>Your offer</h2>
+              <button type="button" class="ghost-button" data-add="you">Add item</button>
+            </div>
+            <div class="rows" id="youRows"></div>
+          </form>
+
+          <form class="offer-card" data-side="them">
+            <div class="card-head">
+              <h2>Their offer</h2>
+              <button type="button" class="ghost-button" data-add="them">Add item</button>
+            </div>
+            <div class="rows" id="themRows"></div>
+          </form>
+        </section>
+
+        <section class="details-band">
+          <div>
+            <h2>Market lookup</h2>
+            <p>The app asks the local server to read public Eldorado listings, filter by brainrot, income, mutation, then sort low to high.</p>
+          </div>
+          <div class="lookup-controls">
+            <label>Min reviews
+              <input id="minReviews" type="number" min="0" step="50" value="1000" />
+            </label>
+            <button type="button" id="lookupAll">Find prices</button>
+          </div>
+        </section>
+
+        <section class="safe-note">
+          <strong>Safe mode</strong>
+          <span>No Roblox login, cookies, passwords, or payments. It only reads public market pages and calculates W/L.</span>
+        </section>
+
+        <div class="matches" id="matches"></div>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>
