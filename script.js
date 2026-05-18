@@ -87,6 +87,12 @@ function getItemName(item) {
   return item.name === "__custom" ? item.customName.trim() : item.name;
 }
 
+function findExactBrainrot(query) {
+  const normalized = String(query || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return brainrots.find((name) => name.toLowerCase() === normalized) || "";
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
 }
@@ -249,8 +255,9 @@ function updateFromInput(side, id, field, value) {
   const item = state[side].find((entry) => entry.id === id);
   if (!item) return;
   if (field === "searchQuery") {
+    const exactBrainrot = findExactBrainrot(value);
     item.searchQuery = value;
-    item.name = "";
+    item.name = exactBrainrot;
     item.customName = "";
   } else {
   item[field] = field === "quantity" ? Math.max(1, Number(value || 1)) : value;
@@ -346,20 +353,31 @@ document.addEventListener("change", (event) => {
   if (event.target.name === "name") render();
 });
 
+function chooseBrainrotOption(option) {
+  const row = option.closest(".item-row");
+  const form = option.closest("form[data-side]");
+  const item = state[form.dataset.side].find((entry) => entry.id === row.dataset.id);
+  if (!item) return;
+  item.name = option.dataset.brainrot;
+  item.searchQuery = option.dataset.brainrot === "__custom" ? "" : option.dataset.brainrot;
+  item.customName = "";
+  item.result = null;
+  item.error = "";
+  item.status = "idle";
+  render();
+}
+
+document.addEventListener("pointerdown", (event) => {
+  const option = event.target.closest(".brainrot-option");
+  if (!option) return;
+  event.preventDefault();
+  chooseBrainrotOption(option);
+});
+
 document.addEventListener("click", (event) => {
   const option = event.target.closest(".brainrot-option");
   if (option) {
-    const row = option.closest(".item-row");
-    const form = option.closest("form[data-side]");
-    const item = state[form.dataset.side].find((entry) => entry.id === row.dataset.id);
-    if (!item) return;
-    item.name = option.dataset.brainrot;
-    item.searchQuery = option.dataset.brainrot === "__custom" ? "" : option.dataset.brainrot;
-    item.customName = "";
-    item.result = null;
-    item.error = "";
-    item.status = "idle";
-    render();
+    chooseBrainrotOption(option);
     return;
   }
 

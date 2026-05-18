@@ -249,7 +249,7 @@ textarea {
 
 .brainrot-menu {
   position: absolute;
-  z-index: 20;
+  z-index: 100;
   top: calc(100% + 6px);
   left: 0;
   right: 0;
@@ -268,12 +268,14 @@ textarea {
 
 .brainrot-option {
   width: 100%;
+  min-height: 44px;
   padding: 10px 12px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--text);
   text-align: left;
+  touch-action: manipulation;
 }
 
 .brainrot-option:hover,
@@ -426,5 +428,10 @@ textarea {
 
   .item-row {
     grid-template-columns: 1fr;
+  }
+
+  .brainrot-menu {
+    position: static;
+    margin-top: 6px;
   }
 }
