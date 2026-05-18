@@ -104,10 +104,6 @@ function formatIncome(value) {
   return String(value);
 }
 
-function listingLine(listing) {
-  return `${formatMoney(listing.price)} - ${formatIncome(listing.incomeNumber)}/s - ${listing.seller} (${Math.round(listing.ratingCount || 0)} reviews)`;
-}
-
 function renderRows(side) {
   const container = side === "you" ? els.youRows : els.themRows;
   container.innerHTML = "";
@@ -220,18 +216,16 @@ function renderMatches() {
     card.className = "match-card";
 
     if (item.status === "loading") {
-      card.innerHTML = `<div><strong>${escapeHtml(itemName || "Empty item")}</strong><span>${item.side}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>Searching...</strong><div><span>Checking Eldorado low to high.</span></div>`;
+      card.innerHTML = `<div><strong>${escapeHtml(itemName || "Empty item")}</strong><span>${item.side}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>Searching...</strong><div><span>Checking current estimates.</span></div>`;
     } else if (best) {
-      const alternatives = (item.result.alternatives || []).slice(1, 4);
       card.innerHTML = `
         <div><strong>${escapeHtml(itemName)}</strong><span>${item.side} - qty ${item.quantity}</span></div>
         <span class="pill">${escapeHtml(item.mutation)}</span>
         <span>${escapeHtml(item.result.incomeRange)} - ${formatIncome(best.incomeNumber)}/s</span>
         <strong>${formatMoney(best.price)}</strong>
         <div>
-          <strong>${escapeHtml(best.title)}</strong>
-          <span>${escapeHtml(best.seller)} - ${Math.round(best.ratingCount || 0)} reviews - ${Number(best.rating || 0).toFixed(1)}% - ${escapeHtml(item.result.searchMode || "market search")}</span>
-          ${alternatives.length ? `<span class="alternatives">Other found: ${alternatives.map((listing) => escapeHtml(listingLine(listing))).join(" | ")}</span>` : ""}
+          <strong>Estimated value</strong>
+          <span>Matched by item, mutation, and income.</span>
         </div>
       `;
     } else if (item.error) {
@@ -282,7 +276,7 @@ async function lookupItem(item) {
   if (state.cache.has(cacheKey)) {
     item.result = state.cache.get(cacheKey);
     item.status = item.result.best ? "done" : "error";
-    item.error = item.result.best ? "" : "No matching Eldorado listing found.";
+    item.error = item.result.best ? "" : "No matching price estimate found.";
     return;
   }
 
@@ -296,7 +290,7 @@ async function lookupItem(item) {
   state.cache.set(cacheKey, result);
   item.result = result;
   item.status = result.best ? "done" : "error";
-  item.error = result.best ? "" : result.error || "No matching Eldorado listing found.";
+  item.error = result.best ? "" : result.error || "No matching price estimate found.";
 }
 
 async function lookupAll() {
@@ -312,7 +306,7 @@ async function lookupAll() {
     items.forEach((item) => {
       if (item.status === "loading") {
         item.status = "error";
-        item.error = "Local server is not running. Open START_CALCULATOR.bat, then press Find prices again.";
+        item.error = "Price check is not available right now. Try again in a moment.";
       }
     });
   } finally {

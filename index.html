@@ -48,20 +48,18 @@
 
         <section class="details-band">
           <div>
-            <h2>Market lookup</h2>
-            <p>The app asks the local server to read public Eldorado listings, filter by brainrot, income, mutation, then sort low to high.</p>
+            <h2>Price check</h2>
+            <p>Estimates are based on recent public marketplace listings and may change.</p>
           </div>
           <div class="lookup-controls">
-            <label>Min reviews
-              <input id="minReviews" type="number" min="0" step="50" value="1000" />
-            </label>
+            <input id="minReviews" type="hidden" value="1000" />
             <button type="button" id="lookupAll">Find prices</button>
           </div>
         </section>
 
         <section class="safe-note">
           <strong>Safe mode</strong>
-          <span>No Roblox login, cookies, passwords, or payments. It only reads public market pages and calculates W/L.</span>
+          <span>No Roblox login, cookies, passwords, or payments. It only estimates values and calculates W/L.</span>
         </section>
 
         <div class="matches" id="matches"></div>

@@ -1,14 +1,13 @@
 Steal a Brainrot Trade Calculator
 
-Open:
+Open locally:
 Double click START_CALCULATOR.bat.
-It starts the safe local server and opens http://localhost:4193.
+It starts the local server and opens http://localhost:4193.
 
 What it does:
-- Reads public Eldorado pages like dragon-cannelloni-for-sale/i/259.
+- Estimates item values from recent public marketplace listings.
 - Filters by brainrot, income range, and mutation.
-- Sorts matches by price from low to high.
-- Uses the cheapest matching listing to show W, L, or FAIR.
+- Calculates W, L, or FAIR.
 
 How to use:
 1. Pick brainrot.
@@ -18,10 +17,9 @@ How to use:
 
 Matching rules:
 - Name must match the brainrot.
-- Mutation is checked in title, description, and mutation text.
-- Income tries equal or higher first.
-- If no equal/higher income exists, it picks the closest lower income.
-- Prices are sorted low to high.
+- Mutation and income are checked against the listing.
+- Very similar income can be used when it is close to your target.
+- Results are estimates and can change.
 
 Safety:
 The app never asks for Roblox login, cookies, passwords, or payment info.

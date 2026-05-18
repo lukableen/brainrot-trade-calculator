@@ -33,6 +33,8 @@ const mime = {
 
 let libraryCache = null;
 let libraryCacheTime = 0;
+const marketCache = new Map();
+const MARKET_CACHE_MS = 10 * 60 * 1000;
 
 function normalize(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -208,8 +210,6 @@ function chooseCheapestAtOrAboveIncome(listings, wantedIncome) {
 
 function toListing(result, preferTextIncome = false) {
   const offer = result.offer;
-  const seller = result.user?.username || "unknown";
-  const sellerId = result.user?.id || offer.userId || "";
   return {
     id: offer.id,
     name: getTradeValue(offer, "Brainrot"),
@@ -219,16 +219,11 @@ function toListing(result, preferTextIncome = false) {
     incomeNumber: offerIncomeNumber(offer, preferTextIncome),
     title: offer.offerTitle,
     description: offer.description,
-    seller,
-    sellerId,
     rating: result.userOrderInfo?.feedbackScore || 0,
     ratingCount: result.userOrderInfo?.ratingCount || 0,
     delivery: offer.guaranteedDeliveryTime,
     price: offer.pricePerUnitInUSD?.amount ?? offer.pricePerUnit?.amount ?? 0,
     currency: offer.pricePerUnitInUSD?.currency || offer.pricePerUnit?.currency || "USD",
-    url: sellerId
-      ? `https://www.eldorado.gg/users/${encodeURIComponent(sellerId)}/shop/CustomItem`
-      : `https://www.eldorado.gg/${GAME_ID}`,
   };
 }
 
@@ -312,6 +307,10 @@ async function searchMarket(params) {
   const income = params.get("income") || "";
   const minReviews = Math.max(0, Number(params.get("minReviews") || 0));
   const forceSearchItems = params.get("custom") === "1";
+  const cacheKey = normalize(`${name}|${mutation}|${income}|${minReviews}|${forceSearchItems ? "custom" : "known"}`);
+  const cached = marketCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < MARKET_CACHE_MS) return cached.value;
+
   const library = await getLibrary();
   const isKnownBrainrot = !forceSearchItems && library.brainrots.some((brainrot) => sameName(brainrot, name));
   const pageSize = 50;
@@ -356,7 +355,7 @@ async function searchMarket(params) {
 
   const { best, alternatives } = await chooseBestVerifiedOffers(candidates, income);
 
-  return {
+  const value = {
     ok: Boolean(best),
     best,
     alternatives,
@@ -369,6 +368,8 @@ async function searchMarket(params) {
     searchMode: isKnownBrainrot ? "category filter" : "search items",
     marketUrl: `https://www.eldorado.gg/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-for-sale/i/259`,
   };
+  marketCache.set(cacheKey, { time: Date.now(), value });
+  return value;
 }
 
 function sendJson(res, status, payload) {
