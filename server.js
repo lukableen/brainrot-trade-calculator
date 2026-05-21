@@ -314,7 +314,7 @@ async function searchMarket(params) {
   const library = await getLibrary();
   const isKnownBrainrot = !forceSearchItems && library.brainrots.some((brainrot) => sameName(brainrot, name));
   const pageSize = 50;
-  const maxPages = 80;
+  const maxPages = 24;
   const wantedRange = rangeForIncome(income);
   let scanned = 0;
   let pagesScanned = 0;
@@ -350,6 +350,7 @@ async function searchMarket(params) {
 
     candidates.push(...matches);
 
+    if (candidates.length >= 40 && pageIndex >= 4) break;
     if (pageIndex >= (data.totalPages || 1)) break;
   }
 

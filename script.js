@@ -292,8 +292,15 @@ async function lookupItem(item) {
   updateTotals();
 
   const params = new URLSearchParams({ name, mutation: item.mutation, income: item.income, minReviews, custom });
-  const response = await fetch(`${API_BASE}/api/search?${params.toString()}`);
-  const result = await response.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  let result;
+  try {
+    const response = await fetch(`${API_BASE}/api/search?${params.toString()}`, { signal: controller.signal });
+    result = await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
   state.cache.set(cacheKey, result);
   item.result = result;
   item.status = result.best ? "done" : "error";
@@ -304,11 +311,39 @@ async function lookupAll() {
   els.lookupAll.disabled = true;
   els.lookupAll.textContent = "Searching...";
   const items = [...state.you, ...state.them];
-  try {
-    for (const item of items) {
-      await lookupItem(item);
-      render();
+  const queue = items.filter((item) => getItemName(item) && item.income);
+  items.forEach((item) => {
+    if (getItemName(item) && item.income) {
+      item.status = "loading";
+      item.error = "";
+    } else {
+      item.status = "error";
+      item.error = "Choose brainrot and income first.";
     }
+  });
+  render();
+
+  let nextIndex = 0;
+  let completed = 0;
+  const workerCount = Math.min(4, queue.length);
+  try {
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (nextIndex < queue.length) {
+          const item = queue[nextIndex];
+          nextIndex += 1;
+          try {
+            await lookupItem(item);
+          } catch {
+            item.status = "error";
+            item.error = "Price check took too long. Try again.";
+          }
+          completed += 1;
+          els.lookupAll.textContent = `Searching ${completed}/${queue.length}...`;
+          render();
+        }
+      })
+    );
   } catch (error) {
     items.forEach((item) => {
       if (item.status === "loading") {
