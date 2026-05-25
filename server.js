@@ -35,6 +35,11 @@ let libraryCache = null;
 let libraryCacheTime = 0;
 const marketCache = new Map();
 const MARKET_CACHE_MS = 10 * 60 * 1000;
+let nextEldoradoRequestAt = 0;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function normalize(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -232,15 +237,31 @@ async function eldoradoGet(endpoint, params) {
   Object.entries(params || {}).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
   });
-  const response = await fetch(url, {
-    headers: {
-      "accept": "application/json",
-      "accept-language": "en-US,en;q=0.9",
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-    },
-  });
-  if (!response.ok) throw new Error(`Eldorado returned ${response.status}`);
-  return response.json();
+  const headers = {
+    "accept": "application/json",
+    "accept-language": "en-US,en;q=0.9",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+  };
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const wait = Math.max(0, nextEldoradoRequestAt - Date.now());
+    if (wait) await sleep(wait);
+    nextEldoradoRequestAt = Date.now() + 450;
+
+    const response = await fetch(url, { headers });
+    if (response.ok) return response.json();
+
+    if (response.status === 429 && attempt < 3) {
+      const retryAfter = Number(response.headers.get("retry-after") || 0);
+      await sleep(retryAfter ? retryAfter * 1000 : 1800 * (attempt + 1));
+      continue;
+    }
+
+    if (response.status === 429) throw new Error("Price source is busy. Try again in a minute.");
+    throw new Error(`Price check failed (${response.status})`);
+  }
+
+  throw new Error("Price source is busy. Try again in a minute.");
 }
 
 async function getActiveOfferDetails(offerId) {
@@ -256,16 +277,16 @@ async function getActiveOfferDetails(offerId) {
 
 async function chooseBestVerifiedOffers(listings, wantedIncome) {
   const wanted = parseIncome(wantedIncome);
-  const sorted = [...listings].sort((a, b) => a.price - b.price || b.incomeNumber - a.incomeNumber);
+  const sorted = [...listings].sort((a, b) => a.price - b.price || a.incomeNumber - b.incomeNumber);
   const closeEnough = wanted
-    ? sorted.filter((listing) => (listing.incomeNumber || 0) >= wanted * INCOME_TOLERANCE)
+    ? sorted.filter((listing) => (listing.incomeNumber || 0) >= wanted)
     : sorted;
   const pool = closeEnough.length ? closeEnough : sorted;
   const cheapest = pool[0]?.price || 0;
   const valueBandExtra = Math.max(1.25, Math.min(3, cheapest * 0.75));
   const valueBand = cheapest ? pool.filter((listing) => listing.price <= cheapest + valueBandExtra) : pool;
   const queue = [...valueBand]
-    .sort((a, b) => b.incomeNumber - a.incomeNumber || a.price - b.price || b.ratingCount - a.ratingCount)
+    .sort((a, b) => a.price - b.price || a.incomeNumber - b.incomeNumber || b.ratingCount - a.ratingCount)
     .concat(pool.filter((listing) => !valueBand.includes(listing)))
     .slice(0, 30);
   const verified = [];
@@ -314,7 +335,7 @@ async function searchMarket(params) {
   const library = await getLibrary();
   const isKnownBrainrot = !forceSearchItems && library.brainrots.some((brainrot) => sameName(brainrot, name));
   const pageSize = 50;
-  const maxPages = 24;
+  const maxPages = 80;
   const wantedRange = rangeForIncome(income);
   let scanned = 0;
   let pagesScanned = 0;
@@ -350,7 +371,6 @@ async function searchMarket(params) {
 
     candidates.push(...matches);
 
-    if (candidates.length >= 40 && pageIndex >= 4) break;
     if (pageIndex >= (data.totalPages || 1)) break;
   }
 
