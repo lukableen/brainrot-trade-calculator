@@ -76,6 +76,10 @@ function rangeForLabel(label) {
   return INCOME_RANGES.find((range) => sameName(range[0], label)) || null;
 }
 
+function rangeIndex(range) {
+  return INCOME_RANGES.findIndex((item) => item === range || sameName(item[0], range?.[0] || range));
+}
+
 function isIncomeInsideRange(income, range) {
   if (!income || !range) return false;
   return income >= range[2] && income <= range[3];
@@ -193,9 +197,8 @@ function incomeMatches(offer, wantedIncome, preferTextIncome = false) {
     return offerIncome > 0 && offerIncome >= wanted;
   }
 
-  if (wantedRange && !sameName(offerRange, wantedRange[0])) return false;
-  if (offerIncome > 0) return offerIncome >= wanted && isIncomeInsideRange(offerIncome, offerRangeInfo);
-  if (wantedRange) return sameName(offerRange, wantedRange[0]);
+  if (offerIncome > 0) return offerIncome >= wanted;
+  if (wantedRange && offerRangeInfo) return rangeIndex(offerRangeInfo) >= rangeIndex(wantedRange);
   return false;
 }
 
@@ -277,11 +280,15 @@ async function getActiveOfferDetails(offerId) {
 
 async function chooseBestVerifiedOffers(listings, wantedIncome) {
   const wanted = parseIncome(wantedIncome);
+  const wantedRange = rangeForIncome(wantedIncome);
   const sorted = [...listings].sort((a, b) => a.price - b.price || a.incomeNumber - b.incomeNumber);
-  const closeEnough = wanted
+  const atOrAbove = wanted
     ? sorted.filter((listing) => (listing.incomeNumber || 0) >= wanted)
     : sorted;
-  const pool = closeEnough.length ? closeEnough : sorted;
+  const sameRange = wantedRange
+    ? atOrAbove.filter((listing) => sameName(listing.incomeRange, wantedRange[0]))
+    : atOrAbove;
+  const pool = sameRange.length ? sameRange : atOrAbove;
   const cheapest = pool[0]?.price || 0;
   const valueBandExtra = Math.max(1.25, Math.min(3, cheapest * 0.75));
   const valueBand = cheapest ? pool.filter((listing) => listing.price <= cheapest + valueBandExtra) : pool;
