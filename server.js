@@ -23,19 +23,46 @@ const INCOME_RANGES = [
   ["10-19.99 B/s", "10-1999-bs", 10e9, 19.99e9],
   ["20+ B/s", "20-bs", 20e9, Infinity],
 ];
+const MIN_MARKET_REVIEWS = 1000;
+const VERIFY_IMAGE_INCOME = true;
+const OFFER_IMAGE_BASE = "https://assetsdelivery.eldorado.gg/v7/_offers-v2_/";
+const OCR_LANG = "eng";
+const REQUIRED_MUTATIONS = ["Phantom"];
 
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
 };
 
+const fallbackLibraryPath = path.join(root, "brainrot-library.json");
 let libraryCache = null;
 let libraryCacheTime = 0;
 const marketCache = new Map();
+const sellerCache = new Map();
+const marketLinkCache = new Map();
+const imageIncomeCache = new Map();
 const MARKET_CACHE_MS = 10 * 60 * 1000;
 let nextEldoradoRequestAt = 0;
+let ocrWorkerPromise = null;
+
+function loadTesseract() {
+  try {
+    return require("tesseract.js");
+  } catch {
+    return require("C:/Users/lukab/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/tesseract.js@7.0.0/node_modules/tesseract.js");
+  }
+}
+
+async function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    const { createWorker } = loadTesseract();
+    ocrWorkerPromise = createWorker(OCR_LANG);
+  }
+  return ocrWorkerPromise;
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,12 +76,39 @@ function sameName(a, b) {
   return normalize(a) === normalize(b);
 }
 
+function withRequiredMutations(values) {
+  const result = Array.isArray(values) && values.length ? [...values] : ["None"];
+  for (const mutation of REQUIRED_MUTATIONS) {
+    if (!result.some((item) => sameName(item, mutation))) result.push(mutation);
+  }
+  return result;
+}
+
+function normalizeMutation(value) {
+  const normalized = normalize(value === "base" || value === "default" ? "none" : value || "none");
+  if (normalized === "phsntom") return "phantom";
+  return normalized;
+}
+
 function parseIncome(value) {
   const clean = String(value || "").toUpperCase().replace(",", ".");
-  const match = clean.match(/(\d+(?:\.\d+)?)\s*([KMBT])?(?:\s*\/?\s*S)?/);
+  const match = clean.match(/(\d+(?:\.\d+)?)\s*(K|M|B|T|THOUSAND|MILLION|MILLIONS|BILLION|BILLIONS|BILL|TRILLION|TRILLIONS)?(?:\s*\/?\s*S)?/);
   if (!match) return 0;
   const amount = Number(match[1]);
-  const multipliers = { K: 1e3, M: 1e6, B: 1e9, T: 1e12 };
+  const multipliers = {
+    K: 1e3,
+    THOUSAND: 1e3,
+    M: 1e6,
+    MILLION: 1e6,
+    MILLIONS: 1e6,
+    B: 1e9,
+    BILLION: 1e9,
+    BILLIONS: 1e9,
+    BILL: 1e9,
+    T: 1e12,
+    TRILLION: 1e12,
+    TRILLIONS: 1e12,
+  };
   return amount * (multipliers[match[2]] || 1);
 }
 
@@ -85,6 +139,30 @@ function isIncomeInsideRange(income, range) {
   return income >= range[2] && income <= range[3];
 }
 
+function effectiveRangeUpper(range) {
+  if (!range) return Infinity;
+  if (Number.isFinite(range[3])) return range[3];
+  if (/B\/s/i.test(range[0])) return 999.99e9;
+  if (/M\/s/i.test(range[0])) return 999.99e6;
+  if (/K\/s/i.test(range[0])) return 999.99e3;
+  return Infinity;
+}
+
+function normalizeIncomeToRange(income, range) {
+  if (!income || !range) return income || 0;
+  if (range[2] === 0 && range[3] === 0) return income === 0 ? 0 : 0;
+
+  const lower = range[2] * 0.9;
+  const upper = effectiveRangeUpper(range) * 1.1;
+  const candidates = [income, income / 10, income / 100];
+  return candidates.find((candidate) => candidate >= lower && candidate <= upper) || 0;
+}
+
+function normalizeIncomeToOfferRange(offer, income) {
+  const range = rangeForLabel(getAttributeValue(offer, "M/s"));
+  return normalizeIncomeToRange(income, range);
+}
+
 function getTradeValue(offer, name) {
   return offer.tradeEnvironmentValues?.find((value) => sameName(value.name, name))?.value || "";
 }
@@ -93,25 +171,125 @@ function getAttribute(offer, name) {
   return offer.attributes?.find((attribute) => sameName(attribute.name, name));
 }
 
-function offerIncomeNumber(offer, preferTextIncome = false) {
-  const textIncome = extractIncomeFromOfferText(offer);
-  if (preferTextIncome && textIncome > 0) return textIncome;
-
-  const msRange = getAttribute(offer, "M/s")?.value?.name || "";
-  const numeric = Number(offer.attributes?.find((attribute) => attribute.id === "steal-a-brainrot-ms-numeric")?.value);
-  if (!Number.isFinite(numeric)) return textIncome;
-  if (/B\/s/i.test(msRange)) return numeric * 1e9;
-  if (/M\/s/i.test(msRange)) return numeric * 1e6;
-  if (/K\/s/i.test(msRange)) return numeric * 1e3;
-  if (numeric > 0) return numeric;
-  return textIncome;
+function getAttributeValue(offer, name) {
+  const value = getAttribute(offer, name)?.value;
+  return value?.name ?? value ?? "";
 }
 
-function extractIncomeFromOfferText(offer) {
+function offerIncomeNumber(offer, preferTextIncome = false) {
+  const msRange = getAttribute(offer, "M/s")?.value?.name || "";
+  const textIncome = extractIncomeFromOfferText(offer, msRange);
+  const textRangeIncome = normalizeIncomeToOfferRange(offer, textIncome);
+  if (preferTextIncome && textRangeIncome > 0) return textRangeIncome;
+
+  const numeric = Number(offer.attributes?.find((attribute) => attribute.id === "steal-a-brainrot-ms-numeric")?.value);
+  if (!Number.isFinite(numeric)) return textRangeIncome || textIncome;
+
+  const range = rangeForLabel(msRange);
+  const scaledValue = numeric * multiplierForRangeLabel(msRange);
+  const scaledRangeIncome = normalizeIncomeToRange(scaledValue, range);
+  if (scaledRangeIncome > 0) return scaledRangeIncome;
+
+  const rawRangeIncome = normalizeIncomeToRange(numeric, range);
+  if (rawRangeIncome > 0) return rawRangeIncome;
+  if (!range && numeric > 0) return scaledValue || numeric;
+  return textRangeIncome;
+}
+
+function multiplierForRangeLabel(label) {
+  if (/T\/s/i.test(label)) return 1e12;
+  if (/B\/s/i.test(label)) return 1e9;
+  if (/M\/s/i.test(label)) return 1e6;
+  if (/K\/s/i.test(label)) return 1e3;
+  return 1;
+}
+
+function extractIncomeFromOfferText(offer, rangeLabel = "") {
   const text = `${offer.offerTitle || ""} ${offer.description || ""}`.replace(/,/g, ".");
-  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*([KMBT])?\s*(?:\/?\s*S|PER\s*SEC|PER\s*SECOND|A\s*SEC|SEC|SECOND)/gi)];
-  if (!matches.length) return 0;
-  return Math.max(...matches.map((match) => parseIncome(`${match[1]}${match[2] || ""}`)));
+  const values = [];
+
+  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*(K|M|B|T|THOUSAND|MILLION|MILLIONS|BILLION|BILLIONS|BILL|TRILLION|TRILLIONS)\b(?:\s*\/?\s*S|\s*PER\s*SEC|\s*PER\s*SECOND|\s*A\s*SEC|\s*SEC|\s*SECOND)?/gi)) {
+    values.push(parseIncome(`${match[1]}${match[2]}`));
+  }
+
+  const inferredMultiplier = multiplierForRangeLabel(rangeLabel);
+  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*\/\s*S\b/gi)) {
+    values.push(Number(match[1]) * inferredMultiplier);
+  }
+
+  if (!values.length) return 0;
+  return Math.max(...values);
+}
+
+function getOfferImageUrl(offer) {
+  const image =
+    offer.mainOfferImage?.originalSizeImage ||
+    offer.mainOfferImage?.largeImage ||
+    offer.offerImages?.[0]?.originalSizeImage ||
+    offer.offerImages?.[0]?.largeImage ||
+    "";
+  if (!image) return "";
+  if (/^https?:\/\//i.test(image)) return image;
+  return `${OFFER_IMAGE_BASE}${image}`;
+}
+
+function matchedImageIncomeNumber(row, imageIncome) {
+  if (!row.incomeNumber || !imageIncome) return false;
+  const range = rangeForLabel(row.msRange || row.incomeRange || "");
+  const candidates = [imageIncome, imageIncome / 10, imageIncome / 100]
+    .map((candidate) => normalizeIncomeToRange(candidate, range) || candidate);
+  return candidates.find((candidate) => {
+    const bigger = Math.max(row.incomeNumber, candidate);
+    const smaller = Math.min(row.incomeNumber, candidate);
+    return smaller / bigger >= INCOME_TOLERANCE;
+  }) || 0;
+}
+
+async function getImageIncomeNumber(offer) {
+  const imageUrl = getOfferImageUrl(offer);
+  if (!imageUrl) return { imageUrl, imageIncomeNumber: 0, imageVerified: false, imageCheck: "missing-image" };
+
+  const cached = imageIncomeCache.get(imageUrl);
+  if (cached && Date.now() - cached.time < MARKET_CACHE_MS) return cached.value;
+
+  try {
+    const worker = await getOcrWorker();
+    const result = await worker.recognize(imageUrl);
+
+    const text = result.data?.text || "";
+    const imageIncomeNumber = normalizeIncomeToOfferRange(offer, parseImageIncome(text));
+    const value = {
+      imageUrl,
+      imageIncomeNumber,
+      imageIncome: formatIncome(imageIncomeNumber),
+      imageOcrText: text.replace(/\s+/g, " ").trim().slice(0, 240),
+      imageVerified: imageIncomeNumber > 0,
+      imageCheck: imageIncomeNumber > 0 ? "read" : "no-income-in-image",
+    };
+    imageIncomeCache.set(imageUrl, { time: Date.now(), value });
+    return value;
+  } catch (error) {
+    ocrWorkerPromise = null;
+    return {
+      imageUrl,
+      imageIncomeNumber: 0,
+      imageIncome: "unknown",
+      imageVerified: false,
+      imageCheck: `ocr-failed: ${error.message}`,
+    };
+  }
+}
+
+function parseImageIncome(text) {
+  const normalized = String(text || "")
+    .replace(/[,，]/g, ".")
+    .replace(/[|]/g, "1")
+    .replace(/\b8\/s\b/gi, "B/s");
+  const values = [];
+  for (const match of normalized.matchAll(/(\d+(?:\.\d+)?)\s*(K|M|B|T|THOUSAND|MILLION|MILLIONS|BILLION|BILLIONS|BILL|TRILLION|TRILLIONS)\b(?:\s*\/?\s*S)?/gi)) {
+    values.push(parseIncome(`${match[1]}${match[2]}`));
+  }
+  return values.length ? Math.max(...values) : 0;
 }
 
 function offerMutation(offer) {
@@ -119,8 +297,7 @@ function offerMutation(offer) {
 }
 
 function mutationMatches(offer, mutation) {
-  const wanted = normalize(mutation === "base" ? "none" : mutation || "none");
-  return normalize(offerMutation(offer)) === wanted;
+  return normalizeMutation(offerMutation(offer)) === normalizeMutation(mutation);
 }
 
 function matchesBrainrot(offer, name, isKnownBrainrot) {
@@ -235,6 +412,285 @@ function toListing(result, preferTextIncome = false) {
   };
 }
 
+function extractProfileSlug(profileUrl) {
+  const raw = String(profileUrl || "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = raw.includes("://") ? new URL(raw) : new URL(`https://www.eldorado.gg/${raw.replace(/^\/+/, "")}`);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const usersIndex = parts.findIndex((part) => sameName(part, "users"));
+    if (usersIndex !== -1 && parts[usersIndex + 1]) return decodeURIComponent(parts[usersIndex + 1]);
+  } catch {
+    // Fall through to a loose text extraction.
+  }
+
+  const match = raw.match(/users\/([^/?#]+)/i);
+  return decodeURIComponent(match?.[1] || raw.replace(/^@/, ""));
+}
+
+function looksLikeUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+async function resolveSeller(profileUrl) {
+  const slug = extractProfileSlug(profileUrl);
+  if (!slug) throw new Error("Paste an Eldorado seller profile link.");
+  if (looksLikeUuid(slug)) return { id: slug, username: slug };
+
+  try {
+    const profile = await eldoradoGet(`users/${encodeURIComponent(slug)}/publicByUsername`);
+    if (profile?.id) {
+      return {
+        id: profile.id,
+        username: profile.username || slug,
+        positiveFeedback: profile.positiveFeedbackPercentage,
+        totalOrders: profile.totalOrders,
+      };
+    }
+  } catch {
+    // Eldorado no longer exposes every username through this endpoint.
+  }
+
+  return { username: slug, usernameOnly: true };
+}
+
+function sellerOfferToRow(result) {
+  const offer = result.offer || result;
+  const price = Number(offer.pricePerUnitInUSD?.amount ?? offer.pricePerUnit?.amount ?? 0);
+  return {
+    id: offer.id,
+    title: offer.offerTitle || "Untitled offer",
+    brainrot: getTradeValue(offer, "Brainrot") || offer.offerTitle || "Unknown item",
+    rarity: getTradeValue(offer, "Rarity") || "unknown",
+    mutation: getAttributeValue(offer, "Mutations") || "None",
+    incomeRange: getAttributeValue(offer, "M/s") || "unknown",
+    incomeNumber: offerIncomeNumber(offer, true),
+    delivery: offer.guaranteedDeliveryTime,
+    quantity: Number(offer.quantity || 0),
+    price,
+    currency: offer.pricePerUnitInUSD?.currency || offer.pricePerUnit?.currency || "USD",
+    seller: result.user?.username || "",
+    ratingCount: result.userOrderInfo?.ratingCount || 0,
+    feedbackScore: result.userOrderInfo?.feedbackScore || 0,
+    imageUrl: getOfferImageUrl(offer),
+    url: `https://www.eldorado.gg/steal-a-brainrot-brainrots/oi/${offer.id}`,
+  };
+}
+
+function extractMarketUrl(rawUrl) {
+  const raw = String(rawUrl || "").trim();
+  if (!raw) throw new Error("Paste an Eldorado market link.");
+
+  try {
+    const parsed = raw.includes("://") ? new URL(raw) : new URL(`https://www.eldorado.gg/${raw.replace(/^\/+/, "")}`);
+    if (!/eldorado\.gg$/i.test(parsed.hostname) && !/\.eldorado\.gg$/i.test(parsed.hostname)) {
+      throw new Error("Use an Eldorado market link.");
+    }
+    return parsed;
+  } catch (error) {
+    if (error.message) throw error;
+    throw new Error("Paste a valid Eldorado market link.");
+  }
+}
+
+function buildMarketLinkRequestParams(marketUrl, pageIndex, pageSize) {
+  const parts = marketUrl.pathname.split("/").filter(Boolean);
+  const categoryMarker = parts[parts.length - 2];
+  const gameId = parts[parts.length - 1];
+
+  if (categoryMarker !== "i" || gameId !== GAME_ID) {
+    throw new Error("Use a Steal a Brainrot item market link ending in /i/259.");
+  }
+
+  const requestParams = {
+    gameId: GAME_ID,
+    category: CATEGORY,
+    pageIndex,
+    pageSize,
+    includeDeliveryMedians: "true",
+    "numericAttributeFilters[0].attributeId": "steal-a-brainrot-ms-numeric",
+  };
+
+  const passthroughKeys = new Set([
+    "searchQuery",
+    "hotSearchQuery",
+    "deliveryTime",
+    "offerSortingCriterion",
+    "isAscending",
+  ]);
+
+  for (const [key, value] of marketUrl.searchParams.entries()) {
+    if (!value || key === "gamePageOfferIndex" || key === "gamePageOfferSize") continue;
+    if (key === "te_v0") requestParams.tradeEnvironmentValue0 = value;
+    else if (key === "te_v1") requestParams.tradeEnvironmentValue1 = value;
+    else if (key === "te_v2") requestParams.tradeEnvironmentValue2 = value;
+    else if (key === "attr_ids") requestParams.offerAttributeIdsCsv = value;
+    else if (key.startsWith("steal-a-brainrot-") || passthroughKeys.has(key)) requestParams[key] = value;
+  }
+
+  return requestParams;
+}
+
+function marketPriceRange(marketUrl) {
+  const lowest = Number(marketUrl.searchParams.get("lowestPrice") || "");
+  const highest = Number(marketUrl.searchParams.get("highestPrice") || "");
+  return {
+    lowest: Number.isFinite(lowest) ? lowest : 0,
+    highest: Number.isFinite(highest) && highest > 0 ? highest : Infinity,
+  };
+}
+
+function priceInsideRange(row, range) {
+  const price = Number(row.price || 0);
+  return price >= range.lowest && price <= range.highest;
+}
+
+async function marketOfferToIncomeRow(result, verifyImage) {
+  const offer = result.offer || result;
+  const row = sellerOfferToRow(result);
+  const imageCheck = verifyImage ? await getImageIncomeNumber(offer) : {};
+  const imageMatchedIncomeNumber = verifyImage ? matchedImageIncomeNumber(row, imageCheck.imageIncomeNumber || 0) : row.incomeNumber;
+  const imageVerified = verifyImage ? imageMatchedIncomeNumber > 0 : true;
+  const imageRejected = verifyImage && (imageCheck.imageIncomeNumber || 0) > 0 && !imageVerified;
+  const incomeNumber = imageVerified && imageMatchedIncomeNumber ? imageMatchedIncomeNumber : row.incomeNumber;
+  return {
+    ...row,
+    ...imageCheck,
+    imageMatchedIncomeNumber,
+    imageVerified,
+    imageRejected,
+    incomeNumber,
+    income: formatIncome(incomeNumber),
+    line: `${row.brainrot} · ${row.mutation} · ${formatIncome(incomeNumber)} · ${new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: row.currency || "USD",
+      maximumFractionDigits: 2,
+    }).format(row.price || 0)}`,
+  };
+}
+
+async function getMarketIncomeOffers(params) {
+  const marketUrl = extractMarketUrl(params.get("url") || "");
+  const minReviews = Math.max(0, Number(params.get("minReviews") || MIN_MARKET_REVIEWS));
+  const verifyImage = params.get("verifyImage") !== "0";
+  const priceRange = marketPriceRange(marketUrl);
+  const pageSize = 50;
+  const maxPages = 200;
+  const cacheKey = `${marketUrl.toString().replace(/([?&])gamePageOffer(Index|Size)=[^&]*/g, "$1")}|reviews:${minReviews}|image:${verifyImage}`;
+  const cached = marketLinkCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < MARKET_CACHE_MS) return cached.value;
+
+  const rows = [];
+  const seenIds = new Set();
+  let recordCount = 0;
+  let pagesScanned = 0;
+  let totalPages = 1;
+
+  for (let pageIndex = 1; pageIndex <= maxPages; pageIndex += 1) {
+    const requestParams = buildMarketLinkRequestParams(marketUrl, pageIndex, pageSize);
+    const data = await eldoradoGet("v1/item-management/offers", requestParams);
+
+    recordCount = data.recordCount || recordCount;
+    totalPages = data.totalPages || totalPages;
+    pagesScanned = pageIndex;
+
+    for (const result of data.results || []) {
+      const offer = result.offer || result;
+      if (!offer?.id || seenIds.has(offer.id)) continue;
+      if ((result.userOrderInfo?.ratingCount || 0) < minReviews) continue;
+      const basicRow = sellerOfferToRow(result);
+      if (!priceInsideRange(basicRow, priceRange)) continue;
+      seenIds.add(offer.id);
+      const row = await marketOfferToIncomeRow(result, verifyImage);
+      if (verifyImage && row.imageRejected) continue;
+      rows.push(row);
+    }
+
+    if (pageIndex >= totalPages) break;
+  }
+
+  rows.sort((a, b) => {
+    const incomeDiff = (b.incomeNumber || 0) - (a.incomeNumber || 0);
+    if (incomeDiff) return incomeDiff;
+    return (a.price || 0) - (b.price || 0);
+  });
+
+  const value = {
+    ok: true,
+    sourceUrl: marketUrl.toString(),
+    recordCount,
+    minReviews,
+    verifyImage,
+    priceRange,
+    pagesScanned,
+    totalPages,
+    results: rows,
+  };
+  marketLinkCache.set(cacheKey, { time: Date.now(), value });
+  return value;
+}
+
+async function getSellerOffers(params) {
+  const profileUrl = params.get("profile") || "";
+  const minPrice = Math.max(0, Number(params.get("minPrice") || 0));
+  const cacheKey = normalize(`${profileUrl}|${minPrice}`);
+  const cached = sellerCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < MARKET_CACHE_MS) return cached.value;
+
+  const seller = await resolveSeller(profileUrl);
+  const pageSize = 50;
+  const maxPages = seller.usernameOnly ? 40 : 200;
+  const rows = [];
+  let recordCount = 0;
+  let pagesScanned = 0;
+  let seenSeller = false;
+
+  for (let pageIndex = 1; pageIndex <= maxPages; pageIndex += 1) {
+    const requestParams = {
+      gameId: GAME_ID,
+      category: CATEGORY,
+      pageIndex,
+      pageSize,
+      offerSortingCriterion: "Price",
+      isAscending: "false",
+      includeDeliveryMedians: "true",
+    };
+    if (seller.id) requestParams.userId = seller.id;
+
+    const data = await eldoradoGet("v1/item-management/offers", requestParams);
+
+    recordCount = data.recordCount || recordCount;
+    pagesScanned = pageIndex;
+    const results = seller.usernameOnly
+      ? (data.results || []).filter((result) => sameName(result.user?.username, seller.username))
+      : (data.results || []);
+    if (results.length) seenSeller = true;
+
+    rows.push(
+      ...results
+        .map(sellerOfferToRow)
+        .filter((row) => row.price >= minPrice)
+        .filter((row) => row.quantity > 0 || row.quantity === 0)
+    );
+
+    if (pageIndex >= (data.totalPages || 1)) break;
+    if (seller.usernameOnly && seenSeller && pageIndex >= 8 && !results.length) break;
+  }
+
+  const value = {
+    ok: true,
+    seller,
+    profileUrl: `https://www.eldorado.gg/users/${seller.id || seller.username}/shop/CustomItem`,
+    recordCount,
+    pagesScanned,
+    scannedByUsername: Boolean(seller.usernameOnly),
+    results: rows.sort((a, b) => b.price - a.price || a.brainrot.localeCompare(b.brainrot)),
+  };
+  sellerCache.set(cacheKey, { time: Date.now(), value });
+  return value;
+}
+
 async function eldoradoGet(endpoint, params) {
   const url = new URL(endpoint, API_BASE);
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -317,14 +773,32 @@ function collectBrainrots(tradeEnvironments) {
   return [...new Set(names)].sort((a, b) => a.localeCompare(b));
 }
 
+function getFallbackLibrary() {
+  try {
+    const data = JSON.parse(fs.readFileSync(fallbackLibraryPath, "utf8"));
+    return {
+      brainrots: Array.isArray(data.brainrots) ? data.brainrots : [],
+      mutations: withRequiredMutations(data.mutations),
+      fallback: true,
+    };
+  } catch {
+    return { brainrots: [], mutations: withRequiredMutations(["None"]), fallback: true };
+  }
+}
+
 async function getLibrary() {
   if (libraryCache && Date.now() - libraryCacheTime < 15 * 60 * 1000) return libraryCache;
-  const data = await eldoradoGet(`library/${GAME_ID}/${CATEGORY}`, { locale: "en-US" });
-  const mutationAttribute = data.attributes?.find((attribute) => attribute.name === "Mutations");
-  libraryCache = {
-    brainrots: collectBrainrots(data.tradeEnvironments),
-    mutations: mutationAttribute?.attributeValues?.map((value) => value.name) || ["None"],
-  };
+  try {
+    const data = await eldoradoGet(`library/${GAME_ID}/${CATEGORY}`, { locale: "en-US" });
+    const mutationAttribute = data.attributes?.find((attribute) => attribute.name === "Mutations");
+    libraryCache = {
+      brainrots: collectBrainrots(data.tradeEnvironments),
+      mutations: withRequiredMutations(mutationAttribute?.attributeValues?.map((value) => value.name)),
+      fallback: false,
+    };
+  } catch {
+    libraryCache = getFallbackLibrary();
+  }
   libraryCacheTime = Date.now();
   return libraryCache;
 }
@@ -444,6 +918,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/search") {
       sendJson(res, 200, await searchMarket(url.searchParams));
+      return;
+    }
+    if (url.pathname === "/api/seller-offers") {
+      sendJson(res, 200, await getSellerOffers(url.searchParams));
+      return;
+    }
+    if (url.pathname === "/api/market-income-offers") {
+      sendJson(res, 200, await getMarketIncomeOffers(url.searchParams));
       return;
     }
   } catch (error) {
