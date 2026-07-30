@@ -27,7 +27,7 @@ const MIN_MARKET_REVIEWS = 1000;
 const VERIFY_IMAGE_INCOME = true;
 const OFFER_IMAGE_BASE = "https://assetsdelivery.eldorado.gg/v7/_offers-v2_/";
 const OCR_LANG = "eng";
-const REQUIRED_MUTATIONS = ["Phantom"];
+const REQUIRED_MUTATIONS = ["Phantom", "Crystal"];
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -885,7 +885,7 @@ function sendJson(res, status, payload) {
 
 function serveFile(req, res) {
   const url = new URL(req.url, `http://localhost:${port}`);
-  const requested = url.pathname === "/" ? "/index.html" : url.pathname;
+  const requested = url.pathname === "/" ? "/brainrot-converter.html" : url.pathname;
   const filePath = path.normalize(path.join(root, requested));
   if (!filePath.startsWith(root)) {
     res.writeHead(403);
