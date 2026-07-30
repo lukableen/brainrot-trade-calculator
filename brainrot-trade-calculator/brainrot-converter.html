@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Steal a Brainrot Price Converter</title>
+    <link rel="stylesheet" href="brainrot-converter.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="trade-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Roblox - Steal a Brainrot</p>
+            <h1>Price Converter</h1>
+          </div>
+        </header>
+
+        <section class="result-band" aria-live="polite">
+          <span>Result</span>
+          <strong id="ratioValue">Choose brainrots</strong>
+          <small id="ratioText">One brainrot measured in the price of another.</small>
+        </section>
+
+        <section class="converter-grid">
+          <form class="converter-card" data-role="source">
+            <div class="card-head">
+              <h2>Your brainrot</h2>
+            </div>
+            <div class="single-row" id="sourceRow"></div>
+          </form>
+
+          <form class="converter-card" data-role="target">
+            <div class="card-head">
+              <h2>In price of</h2>
+            </div>
+            <div class="single-row" id="targetRow"></div>
+          </form>
+        </section>
+
+        <section class="details-band">
+          <div>
+            <h2>Eldorado price check</h2>
+            <p>Same search logic as the trade calculator. Cached prices are reused for 10 minutes.</p>
+          </div>
+          <div class="lookup-controls">
+            <input id="minReviews" type="hidden" value="1000" />
+            <button type="button" id="lookupAll">Find ratio</button>
+          </div>
+        </section>
+
+        <section class="safe-note">
+          <strong>Safe mode</strong>
+          <span>No Roblox login, cookies, passwords, or payments. It only reads public listing estimates.</span>
+        </section>
+
+        <div class="matches" id="matches"></div>
+      </section>
+    </main>
+    <script src="brainrot-converter.js"></script>
+  </body>
+</html>
