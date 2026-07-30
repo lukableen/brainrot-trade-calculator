@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Steal a Brainrot Price Converter</title>
-    <link rel="stylesheet" href="brainrot-converter.css" />
+    <title>Steal a Brainrot Trade Calculator</title>
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="app-shell">
@@ -12,51 +12,80 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Roblox - Steal a Brainrot</p>
-            <h1>Price Converter</h1>
+            <h1>Trade Calculator</h1>
           </div>
+          <button type="button" id="findPrices">Find prices</button>
         </header>
 
-        <section class="result-band" aria-live="polite">
-          <span>Result</span>
-          <strong id="ratioValue">Choose brainrots</strong>
-          <small id="ratioText">One brainrot measured in the price of another.</small>
+        <section class="scoreboard" aria-live="polite">
+          <article>
+            <span>Your offer</span>
+            <strong id="yourTotal">$0.00</strong>
+          </article>
+          <article class="result-card">
+            <strong id="tradeResult">Find prices</strong>
+            <span id="tradeDiff">Add both offers, then check prices.</span>
+          </article>
+          <article>
+            <span>Their offer</span>
+            <strong id="theirTotal">$0.00</strong>
+          </article>
         </section>
 
-        <section class="converter-grid">
-          <form class="converter-card" data-role="source">
-            <div class="card-head">
-              <h2>Your brainrot</h2>
+        <section class="offers-grid">
+          <section class="offer-side">
+            <div class="side-head">
+              <h2>Your offer</h2>
+              <button type="button" data-add="your">Add item</button>
             </div>
-            <div class="single-row" id="sourceRow"></div>
-          </form>
+            <div id="yourItems" class="items-list"></div>
+          </section>
 
-          <form class="converter-card" data-role="target">
-            <div class="card-head">
-              <h2>In price of</h2>
+          <section class="offer-side">
+            <div class="side-head">
+              <h2>Their offer</h2>
+              <button type="button" data-add="their">Add item</button>
             </div>
-            <div class="single-row" id="targetRow"></div>
-          </form>
+            <div id="theirItems" class="items-list"></div>
+          </section>
         </section>
 
         <section class="details-band">
           <div>
-            <h2>Eldorado price check</h2>
-            <p>Same search logic as the trade calculator. Cached prices are reused for 10 minutes.</p>
+            <h2>Price check</h2>
+            <p>Estimates are based on recent public marketplace listings and may change.</p>
           </div>
-          <div class="lookup-controls">
-            <input id="minReviews" type="hidden" value="1000" />
-            <button type="button" id="lookupAll">Find ratio</button>
-          </div>
+          <input id="minReviews" type="hidden" value="1000" />
         </section>
 
         <section class="safe-note">
           <strong>Safe mode</strong>
-          <span>No Roblox login, cookies, passwords, or payments. It only reads public listing estimates.</span>
+          <span>No Roblox login, cookies, passwords, or payments. It only estimates values and calculates W/L.</span>
         </section>
 
-        <div class="matches" id="matches"></div>
+        <section id="priceRows" class="price-rows"></section>
       </section>
     </main>
-    <script src="brainrot-converter.js"></script>
+
+    <template id="itemTemplate">
+      <article class="item-row">
+        <label class="brainrot-picker">Brainrot
+          <input class="brainrot-search" name="searchQuery" placeholder="Type: Dragon..." autocomplete="off" />
+          <div class="brainrot-menu"></div>
+        </label>
+        <label>Mutation
+          <select name="mutation"></select>
+        </label>
+        <label>Income / sec
+          <input name="income" placeholder="250M or 1.8B" />
+        </label>
+        <label>Qty
+          <input name="qty" type="number" min="1" step="1" value="1" />
+        </label>
+        <button type="button" class="remove-item" title="Remove item">X</button>
+      </article>
+    </template>
+
+    <script src="script.js"></script>
   </body>
 </html>

@@ -1,105 +1,83 @@
 const API_BASE = window.location.origin;
+const PRICE_CACHE_MS = 10 * 60 * 1000;
+const REQUIRED_MUTATIONS = ["Phantom", "Crystal"];
 
-let brainrots = [
-  "Noobini Pizzanini",
-  "Lirili Larila",
-  "Tim Cheese",
-  "Fluriflura",
-  "Talpa Di Fero",
-  "Svinina Bombardino",
-  "Pipi Kiwi",
-  "Trippi Troppi",
-  "Tung Tung Tung Sahur",
-  "Gangster Footera",
-  "Boneca Ambalabu",
-  "Brr Brr Patapim",
-  "Ta Ta Ta Ta Sahur",
-  "Tric Trac Baraboom",
-  "Cappuccino Assassino",
-  "Burbaloni Loliloli",
-  "Chimpanzini Bananini",
-  "Ballerina Cappuccina",
-  "Chef Crabracadabra",
-  "Frigo Camelo",
-  "Orangutini Ananassini",
-  "Rhino Toasterino",
-  "Bombardiro Crocodilo",
-  "Bombombini Gusini",
-  "Cocofanto Elefanto",
-  "Girafa Celestre",
-  "Matteo",
-  "Tralalero Tralala",
-  "Odin Din Din Dun",
-  "Unclito Samito",
-  "La Vacca Saturno Saturnita",
-  "Graipuss Medussi",
-  "Los Tralaleritos",
-  "Pot Hotspot",
-  "Sammyni Spiderini",
-  "Agarrini La Palini",
-  "Garama and Madundung",
-  "Dragon Cannelloni",
-  "Cerberus",
-  "Burguro and Fryuro",
-  "Strawberry Elephant",
-  "La Secret Combinasion",
-  "Ketchuru And Musturu",
-  "Capitano Moby",
-  "Guest 666",
-  "Meowl",
-  "Hydra Bunny",
-];
-
-let mutations = ["None", "Gold", "Diamond", "Bloodrot", "Candy", "Lava", "Galaxy", "Yin-Yang", "Radioactive", "Rainbow"];
+let brainrots = ["Garama and Madundung", "Dragon Cannelloni", "Hydra Bunny", "Strawberry Elephant"];
+let mutations = ["None", "Gold", "Diamond", "Bloodrot", "Candy", "Lava", "Galaxy", "Yin-Yang", "Radioactive", "Rainbow", "Phantom", "Crystal"];
+let nextId = 1;
 
 const state = {
-  you: [],
-  them: [],
+  your: [],
+  their: [],
   cache: new Map(),
 };
 
 const els = {
-  youRows: document.querySelector("#youRows"),
-  themRows: document.querySelector("#themRows"),
+  yourItems: document.querySelector("#yourItems"),
+  theirItems: document.querySelector("#theirItems"),
   yourTotal: document.querySelector("#yourTotal"),
   theirTotal: document.querySelector("#theirTotal"),
-  verdict: document.querySelector("#verdict"),
-  matches: document.querySelector("#matches"),
-  lookupAll: document.querySelector("#lookupAll"),
+  tradeResult: document.querySelector("#tradeResult"),
+  tradeDiff: document.querySelector("#tradeDiff"),
+  resultCard: document.querySelector(".result-card"),
+  priceRows: document.querySelector("#priceRows"),
+  findPrices: document.querySelector("#findPrices"),
   minReviews: document.querySelector("#minReviews"),
+  template: document.querySelector("#itemTemplate"),
 };
 
-function newItem(name = "", income = "", mutation = "None", quantity = 1, customName = "") {
+function newItem(side, name = "", mutation = "None", income = "", qty = 1) {
   return {
-    id: crypto.randomUUID(),
+    id: nextId++,
+    side,
     name,
-    customName,
-    income,
+    searchQuery: name,
     mutation,
-    quantity,
+    income,
+    qty,
     status: "idle",
     result: null,
     error: "",
+    cacheTime: 0,
+    fromCache: false,
   };
-}
-
-function getItemName(item) {
-  return item.name === "__custom" ? item.customName.trim() : item.name;
-}
-
-function findExactBrainrot(query) {
-  const normalized = String(query || "").trim().toLowerCase();
-  if (!normalized) return "";
-  return brainrots.find((name) => name.toLowerCase() === normalized) || "";
 }
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
 }
 
+function sameText(a, b) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
+function ensureRequiredMutations() {
+  for (const mutation of REQUIRED_MUTATIONS) {
+    if (!mutations.some((item) => sameText(item, mutation))) mutations.push(mutation);
+  }
+}
+
+function findExactBrainrot(query) {
+  return brainrots.find((name) => sameText(name, query)) || "";
+}
+
+function itemName(item) {
+  return (item.name || item.searchQuery || "").trim();
+}
+
+function brainrotOptionsHtml(query) {
+  const normalized = String(query || "").trim().toLowerCase();
+  const options = normalized
+    ? brainrots.filter((name) => name.toLowerCase().startsWith(normalized)).slice(0, 80)
+    : brainrots.slice(0, 80);
+  return `
+    ${options.map((name) => `<button type="button" class="brainrot-option" data-brainrot="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
+    ${options.length ? "" : `<span class="brainrot-empty">Custom search</span>`}
+  `;
+}
+
 function formatMoney(value) {
-  if (value === null || value === undefined) return "?";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Number(value || 0));
 }
 
 function formatIncome(value) {
@@ -107,255 +85,189 @@ function formatIncome(value) {
   if (value >= 1e12) return `${Number((value / 1e12).toFixed(2))}T`;
   if (value >= 1e9) return `${Number((value / 1e9).toFixed(2))}B`;
   if (value >= 1e6) return `${Number((value / 1e6).toFixed(2))}M`;
+  if (value >= 1e3) return `${Number((value / 1e3).toFixed(2))}K`;
   return String(value);
 }
 
-function renderRows(side) {
-  const container = side === "you" ? els.youRows : els.themRows;
-  container.innerHTML = "";
-  state[side].forEach((item) => {
-    const itemName = getItemName(item);
-    const query = item.searchQuery ?? itemName;
-    const options = query
-      ? brainrots.filter((name) => name.toLowerCase().startsWith(query.toLowerCase())).slice(0, 12)
-      : brainrots.slice(0, 12);
-    const row = document.createElement("div");
-    row.className = "item-row";
-    row.dataset.id = item.id;
-    row.innerHTML = `
-      <label class="brainrot-picker">Brainrot
-        <input class="brainrot-search" name="searchQuery" value="${escapeHtml(query)}" placeholder="Type: si" autocomplete="off" />
-        <input type="hidden" name="name" value="${escapeHtml(item.name)}" />
-        <div class="brainrot-menu">
-          ${options.map((name) => `<button type="button" class="brainrot-option" data-brainrot="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
-          <button type="button" class="brainrot-option custom-option" data-brainrot="__custom">Custom...</button>
-        </div>
-      </label>
-      <label class="${item.name === "__custom" ? "" : "hidden"}">Custom name
-        <input name="customName" value="${escapeHtml(item.customName)}" placeholder="Brainrot name" />
-      </label>
-      <label>Mutation
-        <select name="mutation">
-          ${mutations.map((mutation) => `<option value="${mutation}" ${item.mutation === mutation ? "selected" : ""}>${mutation}</option>`).join("")}
-        </select>
-      </label>
-      <label>Income / sec
-        <input name="income" value="${escapeHtml(item.income)}" placeholder="1.8B or 750M" />
-      </label>
-      <label>Qty
-        <input name="quantity" type="number" min="1" value="${item.quantity}" />
-      </label>
-      <button class="remove" type="button" title="Remove">x</button>
-    `;
-    container.appendChild(row);
-  });
+function allItems() {
+  return [...state.your, ...state.their];
 }
 
-function brainrotOptionsHtml(query) {
-  const options = query
-    ? brainrots.filter((name) => name.toLowerCase().startsWith(query.toLowerCase())).slice(0, 12)
-    : brainrots.slice(0, 12);
-  return `
-    ${options.map((name) => `<button type="button" class="brainrot-option" data-brainrot="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
-    <button type="button" class="brainrot-option custom-option" data-brainrot="__custom">Custom...</button>
-  `;
+function sideTotal(side) {
+  return state[side].reduce((sum, item) => sum + Number(item.result?.best?.price || 0) * Math.max(1, Number(item.qty || 1)), 0);
 }
 
-function itemValue(item) {
-  const price = item.result?.best?.price;
-  if (!price) return null;
-  return price * Number(item.quantity || 1);
-}
+function updateScoreboard() {
+  const your = sideTotal("your");
+  const their = sideTotal("their");
+  els.yourTotal.textContent = formatMoney(your);
+  els.theirTotal.textContent = formatMoney(their);
+  els.resultCard.classList.remove("is-loss", "is-fair");
 
-function calculateSide(side) {
-  let total = 0;
-  let missing = 0;
-  state[side].forEach((item) => {
-    const value = itemValue(item);
-    if (value === null) missing += 1;
-    else total += value;
-  });
-  return { total, missing };
-}
-
-function updateTotals() {
-  const your = calculateSide("you");
-  const their = calculateSide("them");
-  els.yourTotal.textContent = your.missing ? `${formatMoney(your.total)} + ?` : formatMoney(your.total);
-  els.theirTotal.textContent = their.missing ? `${formatMoney(their.total)} + ?` : formatMoney(their.total);
-
-  els.verdict.className = "verdict";
-  if (your.missing || their.missing) {
-    els.verdict.textContent = "Find prices";
-    return;
-  }
-  if (!your.total && !their.total) {
-    els.verdict.textContent = "Add offers";
+  if (allItems().some((item) => item.status === "loading")) {
+    els.tradeResult.textContent = "Searching...";
+    els.tradeDiff.textContent = "Checking prices.";
     return;
   }
 
-  const diff = their.total - your.total;
-  const fairBand = Math.max(2, Math.max(your.total, their.total) * 0.06);
-  if (Math.abs(diff) <= fairBand) {
-    els.verdict.textContent = "FAIR";
-    els.verdict.classList.add("fair");
+  if (!your && !their) {
+    els.tradeResult.textContent = "Find prices";
+    els.tradeDiff.textContent = "Add both offers, then check prices.";
+    return;
+  }
+
+  const diff = their - your;
+  if (Math.abs(diff) < 0.5) {
+    els.tradeResult.textContent = "FAIR";
+    els.tradeDiff.textContent = `Difference ${formatMoney(diff)}.`;
+    els.resultCard.classList.add("is-fair");
   } else if (diff > 0) {
-    els.verdict.textContent = `W +${formatMoney(diff)}`;
-    els.verdict.classList.add("win");
+    els.tradeResult.textContent = `W +${formatMoney(diff)}`;
+    els.tradeDiff.textContent = "Their offer is worth more.";
   } else {
-    els.verdict.textContent = `L ${formatMoney(diff)}`;
-    els.verdict.classList.add("loss");
+    els.tradeResult.textContent = `L -${formatMoney(Math.abs(diff))}`;
+    els.tradeDiff.textContent = "Your offer is worth more.";
+    els.resultCard.classList.add("is-loss");
   }
 }
 
-function renderMatches() {
-  const allItems = [
-    ...state.you.map((item) => ({ ...item, side: "Your offer" })),
-    ...state.them.map((item) => ({ ...item, side: "Their offer" })),
-  ];
+function renderItem(item) {
+  const node = els.template.content.firstElementChild.cloneNode(true);
+  node.dataset.id = item.id;
 
-  els.matches.innerHTML = "";
-  allItems.forEach((item) => {
-    const itemName = getItemName(item);
+  const search = node.querySelector('[name="searchQuery"]');
+  const menu = node.querySelector(".brainrot-menu");
+  const mutation = node.querySelector('[name="mutation"]');
+  const income = node.querySelector('[name="income"]');
+  const qty = node.querySelector('[name="qty"]');
+
+  search.value = item.searchQuery;
+  menu.innerHTML = brainrotOptionsHtml(item.searchQuery);
+  mutation.innerHTML = mutations.map((value) => `<option value="${escapeHtml(value)}" ${sameText(item.mutation, value) ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
+  income.value = item.income;
+  qty.value = item.qty;
+  return node;
+}
+
+function renderItems() {
+  els.yourItems.replaceChildren(...state.your.map(renderItem));
+  els.theirItems.replaceChildren(...state.their.map(renderItem));
+  renderPriceRows();
+  updateScoreboard();
+}
+
+function renderPriceRows() {
+  els.priceRows.innerHTML = "";
+  for (const item of allItems()) {
     const best = item.result?.best;
-    const card = document.createElement("article");
-    card.className = "match-card";
+    const row = document.createElement("article");
+    row.className = "price-row";
+    const label = item.side === "your" ? "Your offer" : "Their offer";
+    const qtyText = `qty ${Math.max(1, Number(item.qty || 1))}`;
 
     if (item.status === "loading") {
-      card.innerHTML = `<div><strong>${escapeHtml(itemName || "Empty item")}</strong><span>${item.side}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>Searching...</strong><div><span>Checking current estimates.</span></div>`;
+      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label} - ${qtyText}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>Searching...</strong><div><span>Checking current estimates.</span></div>`;
     } else if (best) {
-      card.innerHTML = `
-        <div><strong>${escapeHtml(itemName)}</strong><span>${item.side} - qty ${item.quantity}</span></div>
+      row.innerHTML = `
+        <div><strong>${escapeHtml(itemName(item))}</strong><span>${label} - ${qtyText}</span></div>
         <span class="pill">${escapeHtml(item.mutation)}</span>
         <span>${escapeHtml(item.result.incomeRange)} - ${formatIncome(best.incomeNumber)}/s</span>
-        <strong>${formatMoney(best.price)}</strong>
-        <div>
-          <strong>Estimated value</strong>
-          <span>Matched by item, mutation, and income.</span>
-        </div>
+        <strong>${formatMoney(best.price * Math.max(1, Number(item.qty || 1)))}</strong>
+        <div><strong>Estimated value</strong><span>Matched by item, mutation, and income.</span></div>
       `;
     } else if (item.error) {
-      card.innerHTML = `<div><strong>${escapeHtml(itemName || "Empty item")}</strong><span>${item.side}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>No price</strong><div><span>${escapeHtml(item.error)}</span></div>`;
+      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label} - ${qtyText}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>No price</strong><div><span>${escapeHtml(item.error)}</span></div>`;
     } else {
-      card.innerHTML = `<div><strong>${escapeHtml(itemName || "Empty item")}</strong><span>${item.side}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income || "income needed")}</span><strong>Not searched</strong><div><span>Press Find prices.</span></div>`;
+      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label} - ${qtyText}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income || "income needed")}</span><strong>Not searched</strong><div><span>Press Find prices.</span></div>`;
     }
-
-    els.matches.appendChild(card);
-  });
-}
-
-function render() {
-  renderRows("you");
-  renderRows("them");
-  updateTotals();
-  renderMatches();
-}
-
-function updateFromInput(side, id, field, value) {
-  const item = state[side].find((entry) => entry.id === id);
-  if (!item) return;
-  if (field === "searchQuery") {
-    const exactBrainrot = findExactBrainrot(value);
-    item.searchQuery = value;
-    item.name = exactBrainrot;
-    item.customName = "";
-  } else {
-  item[field] = field === "quantity" ? Math.max(1, Number(value || 1)) : value;
+    els.priceRows.append(row);
   }
+}
+
+function findItemByElement(element) {
+  const row = element.closest(".item-row");
+  const id = Number(row?.dataset.id || 0);
+  return allItems().find((item) => item.id === id);
+}
+
+function resetItem(item) {
+  item.status = "idle";
   item.result = null;
   item.error = "";
-  item.status = "idle";
-  updateTotals();
-  renderMatches();
+  item.fromCache = false;
+}
+
+function priceCacheKey(item) {
+  const minReviews = Math.max(0, Number(els.minReviews.value || 0));
+  const custom = findExactBrainrot(itemName(item)) ? "0" : "1";
+  return `${itemName(item)}|${item.mutation}|${item.income}|reviews:${minReviews}|custom:${custom}`;
+}
+
+function getCachedPrice(key) {
+  const cached = state.cache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.time > PRICE_CACHE_MS) {
+    state.cache.delete(key);
+    return null;
+  }
+  return cached;
 }
 
 async function lookupItem(item) {
-  const name = getItemName(item);
+  const name = itemName(item);
   if (!name || !item.income) {
-    item.error = "Choose brainrot and income first.";
     item.status = "error";
+    item.error = "Choose brainrot and income first.";
+    return;
+  }
+
+  const key = priceCacheKey(item);
+  const cached = getCachedPrice(key);
+  if (cached) {
+    item.result = cached.result;
+    item.status = item.result.best ? "done" : "error";
+    item.error = item.result.best ? "" : "No matching price estimate found.";
+    item.fromCache = true;
     return;
   }
 
   const minReviews = Math.max(0, Number(els.minReviews.value || 0));
-  const custom = item.name === "__custom" ? "1" : "0";
-  const cacheKey = `${name}|${item.mutation}|${item.income}|reviews:${minReviews}|custom:${custom}`;
-  if (state.cache.has(cacheKey)) {
-    item.result = state.cache.get(cacheKey);
-    item.status = item.result.best ? "done" : "error";
-    item.error = item.result.best ? "" : "No matching price estimate found.";
-    return;
-  }
-
-  item.status = "loading";
-  renderMatches();
-  updateTotals();
-
+  const custom = findExactBrainrot(name) ? "0" : "1";
   const params = new URLSearchParams({ name, mutation: item.mutation, income: item.income, minReviews, custom });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
-  let result;
-  try {
-    const response = await fetch(`${API_BASE}/api/search?${params.toString()}`, { signal: controller.signal });
-    result = await response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-  state.cache.set(cacheKey, result);
+  const response = await fetch(`${API_BASE}/api/search?${params.toString()}`);
+  const result = await response.json();
+  state.cache.set(key, { result, time: Date.now() });
   item.result = result;
   item.status = result.best ? "done" : "error";
   item.error = result.best ? "" : result.error || "No matching price estimate found.";
 }
 
 async function lookupAll() {
-  els.lookupAll.disabled = true;
-  els.lookupAll.textContent = "Searching...";
-  const items = [...state.you, ...state.them];
-  const queue = items.filter((item) => getItemName(item) && item.income);
-  items.forEach((item) => {
-    if (getItemName(item) && item.income) {
-      item.status = "loading";
-      item.error = "";
-    } else {
-      item.status = "error";
-      item.error = "Choose brainrot and income first.";
-    }
-  });
-  render();
-
-  let nextIndex = 0;
-  let completed = 0;
-  const workerCount = Math.min(4, queue.length);
-  try {
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        while (nextIndex < queue.length) {
-          const item = queue[nextIndex];
-          nextIndex += 1;
-          try {
-            await lookupItem(item);
-          } catch {
-            item.status = "error";
-            item.error = "Price check took too long. Try again.";
-          }
-          completed += 1;
-          els.lookupAll.textContent = `Searching ${completed}/${queue.length}...`;
-          render();
-        }
-      })
-    );
-  } catch (error) {
-    items.forEach((item) => {
-      if (item.status === "loading") {
-        item.status = "error";
-        item.error = "Price check is not available right now. Try again in a moment.";
-      }
-    });
-  } finally {
-    els.lookupAll.disabled = false;
-    els.lookupAll.textContent = "Find prices";
-    render();
+  const queue = allItems();
+  els.findPrices.disabled = true;
+  for (const item of queue) {
+    item.status = "loading";
+    item.error = "";
   }
+  renderPriceRows();
+  updateScoreboard();
+
+  let done = 0;
+  for (const item of queue) {
+    els.findPrices.textContent = `Searching ${done + 1}/${queue.length}...`;
+    try {
+      await lookupItem(item);
+    } catch {
+      item.status = "error";
+      item.error = "Price check failed. Try again.";
+    }
+    done += 1;
+    renderPriceRows();
+    updateScoreboard();
+  }
+
+  els.findPrices.disabled = false;
+  els.findPrices.textContent = "Find prices";
 }
 
 async function loadOptions() {
@@ -365,76 +277,77 @@ async function loadOptions() {
     if (Array.isArray(options.brainrots) && options.brainrots.length) brainrots = options.brainrots;
     if (Array.isArray(options.mutations) && options.mutations.length) mutations = options.mutations;
   } catch {
-    // Keep fallback lists if the local server is not running yet.
+    try {
+      const response = await fetch("brainrot-library.json");
+      const options = await response.json();
+      if (Array.isArray(options.brainrots) && options.brainrots.length) brainrots = options.brainrots;
+      if (Array.isArray(options.mutations) && options.mutations.length) mutations = options.mutations;
+    } catch {
+      // Keep inline fallback.
+    }
   }
+  ensureRequiredMutations();
 }
 
 document.addEventListener("input", (event) => {
-  const row = event.target.closest(".item-row");
-  const form = event.target.closest("form[data-side]");
-  if (!row || !form || !event.target.name) return;
-  updateFromInput(form.dataset.side, row.dataset.id, event.target.name, event.target.value);
+  const item = findItemByElement(event.target);
+  if (!item || !event.target.name) return;
   if (event.target.name === "searchQuery") {
-    const menu = row.querySelector(".brainrot-menu");
+    item.searchQuery = event.target.value;
+    item.name = findExactBrainrot(event.target.value);
+    const menu = event.target.closest(".brainrot-picker")?.querySelector(".brainrot-menu");
     if (menu) menu.innerHTML = brainrotOptionsHtml(event.target.value);
+  } else if (event.target.name === "qty") {
+    item.qty = Math.max(1, Number(event.target.value || 1));
+  } else {
+    item[event.target.name] = event.target.value;
   }
+  resetItem(item);
+  renderPriceRows();
+  updateScoreboard();
 });
 
 document.addEventListener("change", (event) => {
-  const row = event.target.closest(".item-row");
-  const form = event.target.closest("form[data-side]");
-  if (!row || !form || !event.target.name) return;
-  if (event.target.name === "searchQuery") return;
-  updateFromInput(form.dataset.side, row.dataset.id, event.target.name, event.target.value);
-  if (event.target.name === "name") render();
+  const item = findItemByElement(event.target);
+  if (!item || !event.target.name || event.target.name === "searchQuery") return;
+  item[event.target.name] = event.target.name === "qty" ? Math.max(1, Number(event.target.value || 1)) : event.target.value;
+  resetItem(item);
+  renderPriceRows();
+  updateScoreboard();
 });
-
-function chooseBrainrotOption(option) {
-  const row = option.closest(".item-row");
-  const form = option.closest("form[data-side]");
-  const item = state[form.dataset.side].find((entry) => entry.id === row.dataset.id);
-  if (!item) return;
-  item.name = option.dataset.brainrot;
-  item.searchQuery = option.dataset.brainrot === "__custom" ? "" : option.dataset.brainrot;
-  item.customName = "";
-  item.result = null;
-  item.error = "";
-  item.status = "idle";
-  render();
-}
 
 document.addEventListener("pointerdown", (event) => {
   const option = event.target.closest(".brainrot-option");
   if (!option) return;
   event.preventDefault();
-  chooseBrainrotOption(option);
+  const item = findItemByElement(option);
+  if (!item) return;
+  item.name = option.dataset.brainrot;
+  item.searchQuery = option.dataset.brainrot;
+  resetItem(item);
+  renderItems();
 });
 
 document.addEventListener("click", (event) => {
-  const option = event.target.closest(".brainrot-option");
-  if (option) {
-    chooseBrainrotOption(option);
+  const addSide = event.target.closest("[data-add]")?.dataset.add;
+  if (addSide) {
+    state[addSide].push(newItem(addSide));
+    renderItems();
     return;
   }
 
-  const addButton = event.target.closest("[data-add]");
-  if (addButton) {
-    state[addButton.dataset.add].push(newItem());
-    render();
-    return;
-  }
-
-  const removeButton = event.target.closest(".remove");
-  if (removeButton) {
-    const row = removeButton.closest(".item-row");
-    const form = removeButton.closest("form[data-side]");
-    state[form.dataset.side] = state[form.dataset.side].filter((item) => item.id !== row.dataset.id);
-    render();
+  const remove = event.target.closest(".remove-item");
+  if (remove) {
+    const item = findItemByElement(remove);
+    if (!item) return;
+    state[item.side] = state[item.side].filter((row) => row.id !== item.id);
+    renderItems();
   }
 });
 
-els.lookupAll.addEventListener("click", lookupAll);
+els.findPrices.addEventListener("click", lookupAll);
 
-state.you.push(newItem("Hydra Bunny", "1.3B", "Diamond", 1));
-state.them.push(newItem("Dragon Cannelloni", "1.8B", "Diamond", 1));
-loadOptions().finally(render);
+state.your.push(newItem("your", "Garama and Madundung", "None", "1.8B", 1));
+state.their.push(newItem("their", "Dragon Cannelloni", "None", "250M", 1));
+
+loadOptions().finally(renderItems);
