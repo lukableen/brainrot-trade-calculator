@@ -885,7 +885,7 @@ function sendJson(res, status, payload) {
 
 function serveFile(req, res) {
   const url = new URL(req.url, `http://localhost:${port}`);
-  const requested = url.pathname === "/" ? "/brainrot-converter.html" : url.pathname;
+  const requested = url.pathname === "/" ? "/index.html" : url.pathname;
   const filePath = path.normalize(path.join(root, requested));
   if (!filePath.startsWith(root)) {
     res.writeHead(403);
