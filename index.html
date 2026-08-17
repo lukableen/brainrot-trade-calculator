@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Steal a Brainrot Trade Calculator</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=trade5" />
   </head>
   <body>
     <main class="app-shell">
@@ -18,34 +18,19 @@
         </header>
 
         <section class="scoreboard" aria-live="polite">
-          <article>
-            <span>Your offer</span>
-            <strong id="yourTotal">$0.00</strong>
-          </article>
-          <article class="result-card">
-            <strong id="tradeResult">Find prices</strong>
-            <span id="tradeDiff">Add both offers, then check prices.</span>
-          </article>
-          <article>
-            <span>Their offer</span>
-            <strong id="theirTotal">$0.00</strong>
-          </article>
+          <article><span>Your offer</span><strong id="yourTotal">$0.00</strong></article>
+          <article class="result-card"><strong id="tradeResult">Find prices</strong><span id="tradeDiff">Add both offers, then check prices.</span></article>
+          <article><span>Their offer</span><strong id="theirTotal">$0.00</strong></article>
         </section>
 
         <section class="offers-grid">
           <section class="offer-side">
-            <div class="side-head">
-              <h2>Your offer</h2>
-              <button type="button" data-add="your">Add item</button>
-            </div>
+            <div class="side-head"><h2>Your offer</h2><button type="button" data-add="your">Add item</button></div>
             <div id="yourItems" class="items-list"></div>
           </section>
 
           <section class="offer-side">
-            <div class="side-head">
-              <h2>Their offer</h2>
-              <button type="button" data-add="their">Add item</button>
-            </div>
+            <div class="side-head"><h2>Their offer</h2><button type="button" data-add="their">Add item</button></div>
             <div id="theirItems" class="items-list"></div>
           </section>
         </section>
@@ -73,19 +58,13 @@
           <input class="brainrot-search" name="searchQuery" placeholder="Type: Dragon..." autocomplete="off" />
           <div class="brainrot-menu"></div>
         </label>
-        <label>Mutation
-          <select name="mutation"></select>
-        </label>
-        <label>Income / sec
-          <input name="income" placeholder="250M or 1.8B" />
-        </label>
-        <label>Qty
-          <input name="qty" type="number" min="1" step="1" value="1" />
-        </label>
+        <label>Mutation<select name="mutation"></select></label>
+        <label>Income / sec<input name="income" placeholder="250M or 1.8B" /></label>
+        <label>Qty<input name="qty" type="number" min="1" step="1" value="1" /></label>
         <button type="button" class="remove-item" title="Remove item">X</button>
       </article>
     </template>
 
-    <script src="script.js"></script>
+    <script src="script.js?v=trade5"></script>
   </body>
 </html>
