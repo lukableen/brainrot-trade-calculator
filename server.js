@@ -45,6 +45,12 @@ const sellerCache = new Map();
 const marketLinkCache = new Map();
 const imageIncomeCache = new Map();
 const MARKET_CACHE_MS = 10 * 60 * 1000;
+const ELDORADO_REQUEST_SPACING_MS = 100;
+const SEARCH_PAGE_SIZE = 50;
+const SEARCH_MAX_PAGES = 80;
+const SEARCH_PAGE_BATCH_SIZE = 4;
+const VERIFY_LIMIT = 30;
+const VERIFY_BATCH_SIZE = 5;
 let nextEldoradoRequestAt = 0;
 let ocrWorkerPromise = null;
 
@@ -126,6 +132,13 @@ function rangeForIncome(income) {
   return INCOME_RANGES.find((range) => value >= range[2] && value <= range[3]) || null;
 }
 
+function rangesAtOrAboveIncome(income) {
+  const wantedRange = rangeForIncome(income);
+  if (!wantedRange) return [null];
+  const startIndex = rangeIndex(wantedRange);
+  return INCOME_RANGES.slice(Math.max(0, startIndex));
+}
+
 function rangeForLabel(label) {
   return INCOME_RANGES.find((range) => sameName(range[0], label)) || null;
 }
@@ -178,14 +191,14 @@ function getAttributeValue(offer, name) {
 
 function offerIncomeNumber(offer, preferTextIncome = false) {
   const msRange = getAttribute(offer, "M/s")?.value?.name || "";
+  const range = rangeForLabel(msRange);
   const textIncome = extractIncomeFromOfferText(offer, msRange);
   const textRangeIncome = normalizeIncomeToOfferRange(offer, textIncome);
   if (preferTextIncome && textRangeIncome > 0) return textRangeIncome;
 
   const numeric = Number(offer.attributes?.find((attribute) => attribute.id === "steal-a-brainrot-ms-numeric")?.value);
-  if (!Number.isFinite(numeric)) return textRangeIncome || textIncome;
+  if (!Number.isFinite(numeric)) return normalizeIncomeToRange(textRangeIncome || textIncome, range);
 
-  const range = rangeForLabel(msRange);
   const scaledValue = numeric * multiplierForRangeLabel(msRange);
   const scaledRangeIncome = normalizeIncomeToRange(scaledValue, range);
   if (scaledRangeIncome > 0) return scaledRangeIncome;
@@ -395,13 +408,15 @@ function chooseCheapestAtOrAboveIncome(listings, wantedIncome) {
 
 function toListing(result, preferTextIncome = false) {
   const offer = result.offer;
+  const incomeRange = getAttribute(offer, "M/s")?.value?.name || "unknown";
+  const incomeRangeInfo = rangeForLabel(incomeRange);
   return {
     id: offer.id,
     name: getTradeValue(offer, "Brainrot"),
     rarity: getTradeValue(offer, "Rarity"),
     mutation: offerMutation(offer),
-    incomeRange: getAttribute(offer, "M/s")?.value?.name || "unknown",
-    incomeNumber: offerIncomeNumber(offer, preferTextIncome),
+    incomeRange,
+    incomeNumber: normalizeIncomeToRange(offerIncomeNumber(offer, preferTextIncome), incomeRangeInfo),
     title: offer.offerTitle,
     description: offer.description,
     rating: result.userOrderInfo?.feedbackScore || 0,
@@ -705,7 +720,7 @@ async function eldoradoGet(endpoint, params) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const wait = Math.max(0, nextEldoradoRequestAt - Date.now());
     if (wait) await sleep(wait);
-    nextEldoradoRequestAt = Date.now() + 450;
+    nextEldoradoRequestAt = Date.now() + ELDORADO_REQUEST_SPACING_MS;
 
     const response = await fetch(url, { headers });
     if (response.ok) return response.json();
@@ -751,13 +766,17 @@ async function chooseBestVerifiedOffers(listings, wantedIncome) {
   const queue = [...valueBand]
     .sort((a, b) => a.price - b.price || a.incomeNumber - b.incomeNumber || b.ratingCount - a.ratingCount)
     .concat(pool.filter((listing) => !valueBand.includes(listing)))
-    .slice(0, 30);
+    .slice(0, VERIFY_LIMIT);
   const verified = [];
 
-  for (const listing of queue) {
-    const details = await getActiveOfferDetails(listing.id);
-    if (details) verified.push({ ...toListing(details, listing.searchMode === "search items"), searchMode: listing.searchMode });
-    if (verified.length >= 5) break;
+  for (let index = 0; index < queue.length && verified.length < 5; index += VERIFY_BATCH_SIZE) {
+    const batch = queue.slice(index, index + VERIFY_BATCH_SIZE);
+    const detailsList = await Promise.all(batch.map((listing) => getActiveOfferDetails(listing.id)));
+    detailsList.forEach((details, batchIndex) => {
+      if (!details || verified.length >= 5) return;
+      const listing = batch[batchIndex];
+      verified.push({ ...toListing(details, listing.searchMode === "search items"), searchMode: listing.searchMode });
+    });
   }
 
   return { best: verified[0] || null, alternatives: verified };
@@ -809,63 +828,97 @@ async function searchMarket(params) {
   const income = params.get("income") || "";
   const minReviews = Math.max(0, Number(params.get("minReviews") || 0));
   const forceSearchItems = params.get("custom") === "1";
-  const cacheKey = normalize(`${name}|${mutation}|${income}|${minReviews}|${forceSearchItems ? "custom" : "known"}`);
+  const cacheKey = normalize(`${name}|${mutation}|${income}|${minReviews}|${forceSearchItems ? "custom" : "known"}|full-fast-v1`);
   const cached = marketCache.get(cacheKey);
   if (cached && Date.now() - cached.time < MARKET_CACHE_MS) return cached.value;
 
   const library = await getLibrary();
   const isKnownBrainrot = !forceSearchItems && library.brainrots.some((brainrot) => sameName(brainrot, name));
-  const pageSize = 50;
-  const maxPages = 80;
+  const pageSize = SEARCH_PAGE_SIZE;
+  const maxPages = SEARCH_MAX_PAGES;
   const wantedRange = rangeForIncome(income);
   let scanned = 0;
   let pagesScanned = 0;
   let seen = 0;
-  const candidates = [];
+  let matchedCount = 0;
+  let best = null;
+  let alternatives = [];
+  let usedIncomeRange = wantedRange?.[0] || "any";
+  const rangesToSearch = [wantedRange || null];
 
-  for (let pageIndex = 1; pageIndex <= maxPages; pageIndex += 1) {
-    const data = await eldoradoGet("v1/item-management/offers", {
-      gameId: GAME_ID,
-      category: CATEGORY,
-      searchQuery: name,
-      pageIndex,
-      pageSize,
-      offerSortingCriterion: "Price",
-      isAscending: "true",
-      includeDeliveryMedians: "true",
-      "numericAttributeFilters[0].attributeId": "steal-a-brainrot-ms-numeric",
-    });
+  for (const searchRange of rangesToSearch) {
+    const candidates = [];
+    const seenIds = new Set();
 
-    scanned += data.results?.length || 0;
-    pagesScanned = pageIndex;
-    seen = data.recordCount || seen;
-    const matches = (data.results || [])
-      .filter((result) => matchesBrainrot(result.offer, name, isKnownBrainrot))
-      .filter((result) => forceSearchItems || !hasWrongBrainrotInText(result.offer, name, library.brainrots))
-      .filter((result) => mutationMatches(result.offer, mutation))
-      .filter((result) => incomeMatches(result.offer, income, forceSearchItems))
-      .filter((result) => !hasRobuxExtraPayment(result.offer))
-      .filter((result) => !hasRandomBrainrotOfferText(result.offer))
-      .filter((result) => (result.userOrderInfo?.ratingCount || 0) >= minReviews)
-      .map((result) => ({ ...toListing(result, forceSearchItems), searchMode: isKnownBrainrot ? "category filter" : "search items" }))
-      .sort((a, b) => a.price - b.price);
+    async function readSearchPage(pageIndex) {
+      const requestParams = {
+        gameId: GAME_ID,
+        category: CATEGORY,
+        searchQuery: name,
+        pageIndex,
+        pageSize,
+        offerSortingCriterion: "Price",
+        isAscending: "true",
+        includeDeliveryMedians: "true",
+        "numericAttributeFilters[0].attributeId": "steal-a-brainrot-ms-numeric",
+      };
+      return eldoradoGet("v1/item-management/offers", requestParams);
+    }
 
-    candidates.push(...matches);
+    function collectMatches(data) {
+      scanned += data.results?.length || 0;
+      pagesScanned += 1;
+      seen += data.recordCount || 0;
+      const matches = (data.results || [])
+        .filter((result) => !seenIds.has(result.offer?.id))
+        .filter((result) => matchesBrainrot(result.offer, name, isKnownBrainrot))
+        .filter((result) => forceSearchItems || !hasWrongBrainrotInText(result.offer, name, library.brainrots))
+        .filter((result) => mutationMatches(result.offer, mutation))
+        .filter((result) => incomeMatches(result.offer, income, forceSearchItems))
+        .filter((result) => !hasRobuxExtraPayment(result.offer))
+        .filter((result) => !hasRandomBrainrotOfferText(result.offer))
+        .filter((result) => (result.userOrderInfo?.ratingCount || 0) >= minReviews)
+        .map((result) => {
+          seenIds.add(result.offer?.id);
+          return { ...toListing(result, forceSearchItems), searchMode: searchRange ? `income range ${searchRange[0]}` : "search items" };
+        })
+        .sort((a, b) => a.price - b.price);
 
-    if (pageIndex >= (data.totalPages || 1)) break;
+      candidates.push(...matches);
+    }
+
+    const firstPage = await readSearchPage(1);
+    collectMatches(firstPage);
+    const totalPages = Math.min(maxPages, firstPage.totalPages || 1);
+
+    for (let pageIndex = 2; pageIndex <= totalPages; pageIndex += SEARCH_PAGE_BATCH_SIZE) {
+      const batchPages = [];
+      for (let offset = 0; offset < SEARCH_PAGE_BATCH_SIZE && pageIndex + offset <= totalPages; offset += 1) {
+        batchPages.push(pageIndex + offset);
+      }
+      const batchData = await Promise.all(batchPages.map((page) => readSearchPage(page)));
+      batchData.forEach(collectMatches);
+    }
+
+    matchedCount += candidates.length;
+    const verified = await chooseBestVerifiedOffers(candidates, income);
+    if (verified.best) {
+      best = verified.best;
+      alternatives = verified.alternatives;
+      usedIncomeRange = searchRange?.[0] || wantedRange?.[0] || "any";
+      break;
+    }
   }
-
-  const { best, alternatives } = await chooseBestVerifiedOffers(candidates, income);
 
   const value = {
     ok: Boolean(best),
     best,
     alternatives,
     scanned,
-    matchedCount: candidates.length,
+    matchedCount,
     recordCount: seen,
     pagesScanned,
-    incomeRange: wantedRange?.[0] || "any",
+    incomeRange: usedIncomeRange,
     minReviews,
     searchMode: isKnownBrainrot ? "category filter" : "search items",
     marketUrl: `https://www.eldorado.gg/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-for-sale/i/259`,
@@ -937,5 +990,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`Brainrot Trade Calculator running at http://localhost:${port}`);
+  console.log(`Brainrot Ratio Finder running at http://localhost:${port}`);
 });
