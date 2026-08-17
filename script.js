@@ -1,40 +1,34 @@
 const API_BASE = window.location.origin;
 const PRICE_CACHE_MS = 10 * 60 * 1000;
+const PRICE_CACHE_STORAGE_KEY = "brainrot-ratio-price-cache-v2";
 const REQUIRED_MUTATIONS = ["Phantom", "Crystal"];
 
-let brainrots = ["Garama and Madundung", "Dragon Cannelloni", "Hydra Bunny", "Strawberry Elephant"];
+let brainrots = ["Garama and Madundung", "Dragon Cannelloni", "Signore Carapace", "Headless Horseman"];
 let mutations = ["None", "Gold", "Diamond", "Bloodrot", "Candy", "Lava", "Galaxy", "Yin-Yang", "Radioactive", "Rainbow", "Phantom", "Crystal"];
-let nextId = 1;
 
 const state = {
-  your: [],
-  their: [],
+  source: newItem("Garama and Madundung", "None", "1.8B"),
+  target: newItem("Dragon Cannelloni", "None", "250M"),
   cache: new Map(),
 };
 
 const els = {
-  yourItems: document.querySelector("#yourItems"),
-  theirItems: document.querySelector("#theirItems"),
-  yourTotal: document.querySelector("#yourTotal"),
-  theirTotal: document.querySelector("#theirTotal"),
-  tradeResult: document.querySelector("#tradeResult"),
-  tradeDiff: document.querySelector("#tradeDiff"),
-  resultCard: document.querySelector(".result-card"),
+  sourceRow: document.querySelector("#sourceRow"),
+  targetRow: document.querySelector("#targetRow"),
+  ratioValue: document.querySelector("#ratioValue"),
+  ratioText: document.querySelector("#ratioText"),
   priceRows: document.querySelector("#priceRows"),
-  findPrices: document.querySelector("#findPrices"),
+  findRatio: document.querySelector("#findRatio"),
   minReviews: document.querySelector("#minReviews"),
-  template: document.querySelector("#itemTemplate"),
 };
 
-function newItem(side, name = "", mutation = "None", income = "", qty = 1) {
+function newItem(name = "", mutation = "None", income = "") {
   return {
-    id: nextId++,
-    side,
     name,
     searchQuery: name,
+    custom: false,
     mutation,
     income,
-    qty,
     status: "idle",
     result: null,
     error: "",
@@ -68,11 +62,13 @@ function itemName(item) {
 function brainrotOptionsHtml(query) {
   const normalized = String(query || "").trim().toLowerCase();
   const options = normalized
-    ? brainrots.filter((name) => name.toLowerCase().startsWith(normalized)).slice(0, 80)
-    : brainrots.slice(0, 80);
+    ? brainrots.filter((name) => name.toLowerCase().includes(normalized))
+    : brainrots;
+  const customLabel = String(query || "").trim();
   return `
     ${options.map((name) => `<button type="button" class="brainrot-option" data-brainrot="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
-    ${options.length ? "" : `<span class="brainrot-empty">Custom search</span>`}
+    ${customLabel ? `<button type="button" class="brainrot-option custom-option" data-custom-brainrot="${escapeHtml(customLabel)}">Custom brainrot: ${escapeHtml(customLabel)}</button>` : ""}
+    ${options.length || customLabel ? "" : `<span class="brainrot-empty">No matches</span>`}
   `;
 }
 
@@ -89,128 +85,171 @@ function formatIncome(value) {
   return String(value);
 }
 
-function allItems() {
-  return [...state.your, ...state.their];
+function cents(value) {
+  return Math.round(Number(value || 0) * 100);
 }
 
-function sideTotal(side) {
-  return state[side].reduce((sum, item) => sum + Number(item.result?.best?.price || 0) * Math.max(1, Number(item.qty || 1)), 0);
-}
-
-function updateScoreboard() {
-  const your = sideTotal("your");
-  const their = sideTotal("their");
-  els.yourTotal.textContent = formatMoney(your);
-  els.theirTotal.textContent = formatMoney(their);
-  els.resultCard.classList.remove("is-loss", "is-fair");
-
-  if (allItems().some((item) => item.status === "loading")) {
-    els.tradeResult.textContent = "Searching...";
-    els.tradeDiff.textContent = "Checking prices.";
-    return;
+function formatRatio(value, targetPrice, sourcePrice) {
+  if (!Number.isFinite(value)) return "?";
+  let decimals = 0;
+  for (; decimals <= 8; decimals += 1) {
+    const roundedRatio = Number(value.toFixed(decimals));
+    if (cents(roundedRatio * targetPrice) === cents(sourcePrice)) break;
   }
-
-  if (!your && !their) {
-    els.tradeResult.textContent = "Find prices";
-    els.tradeDiff.textContent = "Add both offers, then check prices.";
-    return;
-  }
-
-  const diff = their - your;
-  if (Math.abs(diff) < 0.5) {
-    els.tradeResult.textContent = "FAIR";
-    els.tradeDiff.textContent = `Difference ${formatMoney(diff)}.`;
-    els.resultCard.classList.add("is-fair");
-  } else if (diff > 0) {
-    els.tradeResult.textContent = `W +${formatMoney(diff)}`;
-    els.tradeDiff.textContent = "Their offer is worth more.";
-  } else {
-    els.tradeResult.textContent = `L -${formatMoney(Math.abs(diff))}`;
-    els.tradeDiff.textContent = "Your offer is worth more.";
-    els.resultCard.classList.add("is-loss");
-  }
+  const fixed = value.toFixed(decimals).replace(/\.?0+$/, "");
+  return fixed.includes(".") ? fixed : `${fixed}.0`;
 }
 
-function renderItem(item) {
-  const node = els.template.content.firstElementChild.cloneNode(true);
-  node.dataset.id = item.id;
-
-  const search = node.querySelector('[name="searchQuery"]');
-  const menu = node.querySelector(".brainrot-menu");
-  const mutation = node.querySelector('[name="mutation"]');
-  const income = node.querySelector('[name="income"]');
-  const qty = node.querySelector('[name="qty"]');
-
-  search.value = item.searchQuery;
-  menu.innerHTML = brainrotOptionsHtml(item.searchQuery);
-  mutation.innerHTML = mutations.map((value) => `<option value="${escapeHtml(value)}" ${sameText(item.mutation, value) ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
-  income.value = item.income;
-  qty.value = item.qty;
-  return node;
-}
-
-function renderItems() {
-  els.yourItems.replaceChildren(...state.your.map(renderItem));
-  els.theirItems.replaceChildren(...state.their.map(renderItem));
-  renderPriceRows();
-  updateScoreboard();
-}
-
-function renderPriceRows() {
-  els.priceRows.innerHTML = "";
-  for (const item of allItems()) {
-    const best = item.result?.best;
-    const row = document.createElement("article");
-    row.className = "price-row";
-    const label = item.side === "your" ? "Your offer" : "Their offer";
-    const qtyText = `qty ${Math.max(1, Number(item.qty || 1))}`;
-
-    if (item.status === "loading") {
-      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label} - ${qtyText}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>Searching...</strong><div><span>Checking current estimates.</span></div>`;
-    } else if (best) {
-      row.innerHTML = `
-        <div><strong>${escapeHtml(itemName(item))}</strong><span>${label} - ${qtyText}</span></div>
-        <span class="pill">${escapeHtml(item.mutation)}</span>
-        <span>${escapeHtml(item.result.incomeRange)} - ${formatIncome(best.incomeNumber)}/s</span>
-        <strong>${formatMoney(best.price * Math.max(1, Number(item.qty || 1)))}</strong>
-        <div><strong>Estimated value</strong><span>Matched by item, mutation, and income.</span></div>
-      `;
-    } else if (item.error) {
-      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label} - ${qtyText}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>No price</strong><div><span>${escapeHtml(item.error)}</span></div>`;
-    } else {
-      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label} - ${qtyText}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income || "income needed")}</span><strong>Not searched</strong><div><span>Press Find prices.</span></div>`;
-    }
-    els.priceRows.append(row);
-  }
-}
-
-function findItemByElement(element) {
-  const row = element.closest(".item-row");
-  const id = Number(row?.dataset.id || 0);
-  return allItems().find((item) => item.id === id);
+function renderPicker(role) {
+  const item = state[role];
+  const container = role === "source" ? els.sourceRow : els.targetRow;
+  container.innerHTML = `
+    <label class="brainrot-picker">Brainrot
+      <input class="brainrot-search" name="searchQuery" value="${escapeHtml(item.searchQuery)}" placeholder="Type: Dragon..." autocomplete="off" />
+      <div class="brainrot-menu">${brainrotOptionsHtml(item.searchQuery)}</div>
+    </label>
+    <label>Mutation
+      <select name="mutation">
+        ${mutations.map((value) => `<option value="${escapeHtml(value)}" ${sameText(item.mutation, value) ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}
+      </select>
+    </label>
+    <label>Income / sec
+      <input name="income" value="${escapeHtml(item.income)}" placeholder="250M or 1.8B" />
+    </label>
+  `;
 }
 
 function resetItem(item) {
   item.status = "idle";
   item.result = null;
   item.error = "";
+  item.cacheTime = 0;
   item.fromCache = false;
+}
+
+function readStoredCache() {
+  try {
+    const raw = localStorage.getItem(PRICE_CACHE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredCache(cache) {
+  try {
+    localStorage.setItem(PRICE_CACHE_STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // Memory cache still works.
+  }
 }
 
 function priceCacheKey(item) {
   const minReviews = Math.max(0, Number(els.minReviews.value || 0));
-  const custom = findExactBrainrot(itemName(item)) ? "0" : "1";
+  const custom = item.custom || !findExactBrainrot(itemName(item)) ? "1" : "0";
   return `${itemName(item)}|${item.mutation}|${item.income}|reviews:${minReviews}|custom:${custom}`;
 }
 
 function getCachedPrice(key) {
-  const cached = state.cache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.time > PRICE_CACHE_MS) {
-    state.cache.delete(key);
-    return null;
+  const memoryCached = state.cache.get(key);
+  if (memoryCached && Date.now() - memoryCached.time <= PRICE_CACHE_MS) return memoryCached;
+  if (memoryCached) state.cache.delete(key);
+
+  const storedCache = readStoredCache();
+  const storedCached = storedCache[key];
+  if (storedCached && Date.now() - storedCached.time <= PRICE_CACHE_MS) {
+    state.cache.set(key, storedCached);
+    return storedCached;
   }
-  return cached;
+  if (storedCached) {
+    delete storedCache[key];
+    writeStoredCache(storedCache);
+  }
+  return null;
+}
+
+function setCachedPrice(key, result) {
+  const entry = { result, time: Date.now() };
+  state.cache.set(key, entry);
+  const storedCache = readStoredCache();
+  storedCache[key] = entry;
+  writeStoredCache(storedCache);
+  return entry;
+}
+
+function cacheAgeText(time) {
+  const minutes = Math.floor(Math.max(0, Date.now() - time) / 60000);
+  return minutes < 1 ? "just now" : `${minutes} min ago`;
+}
+
+function updateRatio() {
+  const sourceName = itemName(state.source);
+  const targetName = itemName(state.target);
+  const sourcePrice = state.source.result?.best?.price;
+  const targetPrice = state.target.result?.best?.price;
+
+  if (state.source.status === "loading" || state.target.status === "loading") {
+    els.ratioValue.textContent = "Searching...";
+    els.ratioText.textContent = "Checking Eldorado listings.";
+    return;
+  }
+
+  if (state.source.error || state.target.error) {
+    els.ratioValue.textContent = "No ratio";
+    els.ratioText.textContent = state.source.error || state.target.error;
+    return;
+  }
+
+  if (!sourceName || !targetName || !sourcePrice || !targetPrice) {
+    els.ratioValue.textContent = "Find ratio";
+    els.ratioText.textContent = `${sourceName || "Brainrot"} in price of ${targetName || "target"}`;
+    return;
+  }
+
+  const ratio = sourcePrice / targetPrice;
+  const formatted = formatRatio(ratio, targetPrice, sourcePrice);
+  els.ratioValue.textContent = formatted;
+  els.ratioText.textContent = `${sourceName} = ${formatted} x ${targetName}`;
+}
+
+function renderPriceRows() {
+  const rows = [
+    { label: "Your brainrot", item: state.source },
+    { label: "Price target", item: state.target },
+  ];
+  els.priceRows.innerHTML = "";
+
+  for (const { label, item } of rows) {
+    const best = item.result?.best;
+    const row = document.createElement("article");
+    row.className = "price-row";
+
+    if (item.status === "loading") {
+      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>Searching...</strong><div><span>Checking current estimates.</span></div>`;
+    } else if (best) {
+      row.innerHTML = `
+        <div><strong>${escapeHtml(itemName(item))}</strong><span>${label}</span></div>
+        <span class="pill">${escapeHtml(item.mutation)}</span>
+        <span>${escapeHtml(best.incomeRange || item.result.incomeRange)} - ${formatIncome(best.incomeNumber)}/s</span>
+        <strong>${formatMoney(best.price)}</strong>
+        <div><strong>${item.fromCache ? "Cached price" : "Matched price"}</strong><span>${item.fromCache ? `Searched ${cacheAgeText(item.cacheTime)}.` : "Used for ratio."}</span></div>
+      `;
+    } else if (item.error) {
+      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income)}</span><strong>No price</strong><div><span>${escapeHtml(item.error)}</span></div>`;
+    } else {
+      row.innerHTML = `<div><strong>${escapeHtml(itemName(item) || "Empty item")}</strong><span>${label}</span></div><span class="pill">${escapeHtml(item.mutation)}</span><span>${escapeHtml(item.income || "income needed")}</span><strong>Not searched</strong><div><span>Press Find ratio.</span></div>`;
+    }
+
+    els.priceRows.append(row);
+  }
+}
+
+function render() {
+  renderPicker("source");
+  renderPicker("target");
+  renderPriceRows();
+  updateRatio();
 }
 
 async function lookupItem(item) {
@@ -227,47 +266,49 @@ async function lookupItem(item) {
     item.result = cached.result;
     item.status = item.result.best ? "done" : "error";
     item.error = item.result.best ? "" : "No matching price estimate found.";
+    item.cacheTime = cached.time;
     item.fromCache = true;
     return;
   }
 
   const minReviews = Math.max(0, Number(els.minReviews.value || 0));
-  const custom = findExactBrainrot(name) ? "0" : "1";
+  const custom = item.custom || !findExactBrainrot(name) ? "1" : "0";
   const params = new URLSearchParams({ name, mutation: item.mutation, income: item.income, minReviews, custom });
   const response = await fetch(`${API_BASE}/api/search?${params.toString()}`);
   const result = await response.json();
-  state.cache.set(key, { result, time: Date.now() });
+  const cacheEntry = setCachedPrice(key, result);
   item.result = result;
   item.status = result.best ? "done" : "error";
   item.error = result.best ? "" : result.error || "No matching price estimate found.";
+  item.cacheTime = cacheEntry.time;
+  item.fromCache = false;
 }
 
-async function lookupAll() {
-  const queue = allItems();
-  els.findPrices.disabled = true;
-  for (const item of queue) {
+async function findRatio() {
+  els.findRatio.disabled = true;
+  els.findRatio.textContent = "Searching...";
+  for (const item of [state.source, state.target]) {
     item.status = "loading";
     item.error = "";
   }
   renderPriceRows();
-  updateScoreboard();
+  updateRatio();
 
-  let done = 0;
-  for (const item of queue) {
-    els.findPrices.textContent = `Searching ${done + 1}/${queue.length}...`;
-    try {
-      await lookupItem(item);
-    } catch {
-      item.status = "error";
-      item.error = "Price check failed. Try again.";
+  try {
+    await Promise.all([lookupItem(state.source), lookupItem(state.target)]);
+  } catch {
+    for (const item of [state.source, state.target]) {
+      if (item.status === "loading") {
+        item.status = "error";
+        item.error = "Price check failed. Try again.";
+      }
     }
-    done += 1;
+  } finally {
+    els.findRatio.disabled = false;
+    els.findRatio.textContent = "Find ratio";
     renderPriceRows();
-    updateScoreboard();
+    updateRatio();
   }
-
-  els.findPrices.disabled = false;
-  els.findPrices.textContent = "Find prices";
 }
 
 async function loadOptions() {
@@ -290,64 +331,53 @@ async function loadOptions() {
 }
 
 document.addEventListener("input", (event) => {
-  const item = findItemByElement(event.target);
-  if (!item || !event.target.name) return;
+  const form = event.target.closest("form[data-role]");
+  if (!form || !event.target.name) return;
+  const item = state[form.dataset.role];
+
   if (event.target.name === "searchQuery") {
     item.searchQuery = event.target.value;
-    item.name = findExactBrainrot(event.target.value);
+    item.name = item.custom ? "" : findExactBrainrot(event.target.value);
     const menu = event.target.closest(".brainrot-picker")?.querySelector(".brainrot-menu");
     if (menu) menu.innerHTML = brainrotOptionsHtml(event.target.value);
-  } else if (event.target.name === "qty") {
-    item.qty = Math.max(1, Number(event.target.value || 1));
   } else {
     item[event.target.name] = event.target.value;
   }
+
   resetItem(item);
   renderPriceRows();
-  updateScoreboard();
+  updateRatio();
 });
 
 document.addEventListener("change", (event) => {
-  const item = findItemByElement(event.target);
-  if (!item || !event.target.name || event.target.name === "searchQuery") return;
-  item[event.target.name] = event.target.name === "qty" ? Math.max(1, Number(event.target.value || 1)) : event.target.value;
+  const form = event.target.closest("form[data-role]");
+  if (!form || !event.target.name || event.target.name === "searchQuery") return;
+  const item = state[form.dataset.role];
+  item[event.target.name] = event.target.value;
   resetItem(item);
   renderPriceRows();
-  updateScoreboard();
+  updateRatio();
 });
 
 document.addEventListener("pointerdown", (event) => {
   const option = event.target.closest(".brainrot-option");
   if (!option) return;
   event.preventDefault();
-  const item = findItemByElement(option);
-  if (!item) return;
-  item.name = option.dataset.brainrot;
-  item.searchQuery = option.dataset.brainrot;
+  const form = option.closest("form[data-role]");
+  const item = state[form.dataset.role];
+  if (option.dataset.customBrainrot) {
+    item.name = "";
+    item.searchQuery = option.dataset.customBrainrot;
+    item.custom = true;
+  } else {
+    item.name = option.dataset.brainrot;
+    item.searchQuery = option.dataset.brainrot;
+    item.custom = false;
+  }
   resetItem(item);
-  renderItems();
+  render();
 });
 
-document.addEventListener("click", (event) => {
-  const addSide = event.target.closest("[data-add]")?.dataset.add;
-  if (addSide) {
-    state[addSide].push(newItem(addSide));
-    renderItems();
-    return;
-  }
+els.findRatio.addEventListener("click", findRatio);
 
-  const remove = event.target.closest(".remove-item");
-  if (remove) {
-    const item = findItemByElement(remove);
-    if (!item) return;
-    state[item.side] = state[item.side].filter((row) => row.id !== item.id);
-    renderItems();
-  }
-});
-
-els.findPrices.addEventListener("click", lookupAll);
-
-state.your.push(newItem("your", "Garama and Madundung", "None", "1.8B", 1));
-state.their.push(newItem("their", "Dragon Cannelloni", "None", "250M", 1));
-
-loadOptions().finally(renderItems);
+loadOptions().finally(render);
